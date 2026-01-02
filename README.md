@@ -146,12 +146,14 @@ IGNORED_EXTENSIONS = [
 
 ```
 labour-bot/
-├── main.py
-├── requirements.txt
-├── runtime.txt          
-├── .env.example
-├── .gitignore
-└── ... other files
+├── main.py                 # Your bot code
+├── requirements.txt        # Python dependencies
+├── runtime.txt            # Python version
+├── railway.toml           # Railway configuration
+├── .env.example           # Template for environment variables
+├── .gitignore            # Git ignore rules
+├── README.md             # Documentation
+└── LICENSE               # License file
 ```
 
 ### Technology Stack
