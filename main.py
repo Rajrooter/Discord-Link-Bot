@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import json
 import os
@@ -12,7 +13,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from openai import OpenAI
-import threading
 
 # the newest OpenAI model is "gpt-5" which was released August 7, 2025.
 # do not change this unless explicitly requested by the user
@@ -25,12 +25,14 @@ ai_client = OpenAI(
     base_url=AI_INTEGRATIONS_OPENAI_BASE_URL
 )
 
-def get_ai_guidance(url):
+async def get_ai_guidance(url):
     """Get AI guidance on whether a link is vital for study purposes"""
     try:
         # the newest OpenAI model is "gpt-5" which was released August 7, 2025.
         # do not change this unless explicitly requested by the user
-        response = ai_client.chat.completions.create(
+        # Run the blocking OpenAI call in a background thread to avoid blocking the event loop
+        response = await asyncio.to_thread(
+            ai_client.chat.completions.create,
             model="gpt-5",
             messages=[
                 {"role": "system", "content": "You are an educational assistant and security specialist. Evaluate if a URL is vital for study purposes. ALSO, check if the link looks like spam, phishing, or malicious content. Provide a concise 1-2 sentence recommendation. If it looks dangerous, warn the user explicitly and advise NOT to save or click it. Focus on both educational value and user safety."},
@@ -124,8 +126,8 @@ CATEGORIES_FILE = "categories.json"
 ONBOARDING_FILE = "onboarding_data.json"
 RULES_FILE = "server_rules.txt"
 
-# **FIXED: Improved URL regex pattern**
-URL_REGEX = r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+[/\w\.-]*\??[/\w\.-=&%]*|www\.[^\s/$.?#].[^\s]*'
+# **FIXED: Simpler and more reliable URL regex pattern**
+URL_REGEX = r'(?:https?://|www\.)\S+'
 
 # File extensions to ignore
 IGNORED_EXTENSIONS = [
@@ -366,22 +368,24 @@ class LinkManager(commands.Cog):
                 return  # **IMPORTANT: Return after handling onboarding**
 
         # **FIXED: Now check for links (only if not in onboarding)**
-        urls = re.findall(URL_REGEX, message.content)
-        print(f"DEBUG: Found URLs: {urls}")  # **DEBUG: Add this to see what URLs are detected**
+        try:
+            # Use re.finditer for deterministic URL extraction
+            urls = [m.group(0) for m in re.finditer(URL_REGEX, message.content)]
+            print(f"DEBUG: Found URLs: {urls}")  # **DEBUG: Add this to see what URLs are detected**
+        except Exception as e:
+            print(f"Error extracting URLs: {e}")
+            urls = []
 
         if urls:
-            # Extract just the URL from the regex match groups
-            found_links = [url[0] if isinstance(url, tuple) else url for url in urls]
-
             # Filter out media URLs to reduce noise
-            non_media_links = [link for link in found_links if not is_media_url(link)]
+            non_media_links = [link for link in urls if not is_media_url(link)]
 
             print(f"DEBUG: Non-media links: {non_media_links}")  # **DEBUG: See filtered links**
 
             # Ask before saving non-media links
             for link in non_media_links:
-                # Get AI guidance
-                guidance = get_ai_guidance(link)
+                # Get AI guidance (now async)
+                guidance = await get_ai_guidance(link)
                 
                 # Send a message asking if the user wants to save the link with AI advice
                 ask_msg = await message.channel.send(
@@ -725,7 +729,7 @@ class LinkManager(commands.Cog):
     @commands.command(name='analyze', help=':- Get AI guidance on a specific link')
     async def analyze_link(self, ctx, url):
         async with ctx.typing():
-            guidance = get_ai_guidance(url)
+            guidance = await get_ai_guidance(url)
             embed = discord.Embed(
                 title="AI Study Guidance",
                 description=guidance,
@@ -831,5 +835,4 @@ if __name__ == "__main__":
         print("Error: DISCORD_TOKEN environment variable not set!")
         print("Please create a .env file with your token: DISCORD_TOKEN=your_token_here")
     else:
-        import asyncio
         asyncio.run(main())
