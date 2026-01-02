@@ -18,9 +18,15 @@ from groq import Groq
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
 if GROQ_API_KEY:
-    ai_client = Groq(api_key=GROQ_API_KEY)
-    AI_ENABLED = True
-    print("✅ Groq AI enabled (FREE)")
+    try:
+        ai_client = Groq(api_key=GROQ_API_KEY)
+        AI_ENABLED = True
+        print("✅ Groq AI enabled (FREE)")
+    except Exception as e:
+        print(f"⚠️ Groq initialization failed: {e}")
+        print("⚠️ AI disabled - Check your GROQ_API_KEY")
+        ai_client = None
+        AI_ENABLED = False
 else:
     ai_client = None
     AI_ENABLED = False
