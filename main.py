@@ -4,6 +4,7 @@ import os
 import re
 from urllib.parse import urlparse
 import asyncio
+import aiohttp
 
 import discord
 from discord.ext import commands
@@ -12,29 +13,66 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-from groq import Groq
-
-# Groq AI Configuration (FREE - No credit card needed!)
+# Groq AI Configuration (using direct HTTP calls instead of SDK)
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-
-# Remove proxy settings that interfere with Groq
-for key in list(os.environ.keys()):
-    if 'proxy' in key.lower():
-        del os.environ[key]
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 if GROQ_API_KEY:
-    try:
-        ai_client = Groq(api_key=GROQ_API_KEY)
-        AI_ENABLED = True
-        print("✅ Groq AI enabled (FREE)")
-    except Exception as e:
-        print(f"⚠️ Groq error: {e}")
-        ai_client = None
-        AI_ENABLED = False
+    AI_ENABLED = True
+    print("✅ Groq AI enabled (FREE) - Using direct API")
 else:
-    ai_client = None
     AI_ENABLED = False
     print("⚠️ AI disabled - Add GROQ_API_KEY to enable")
+
+async def get_ai_guidance(url: str) -> str:
+    """Get AI guidance on whether a link is vital for study purposes.
+    
+    Uses Groq's API directly via HTTP calls (avoiding SDK issues).
+    """
+    
+    if not AI_ENABLED or not GROQ_API_KEY:
+        return "📝 **Manual Review Needed** - AI analysis unavailable. Add GROQ_API_KEY to enable free AI analysis."
+    
+    try:
+        system_prompt = (
+            "You are an educational assistant and security specialist. "
+            "Evaluate if a URL is vital for study purposes. Also check if the link looks like spam, phishing, or unsafe. "
+            "Provide a short verdict (Safe / Suspect / Unsafe), a concise reason, and a suggestion whether to save the link for study."
+        )
+        user_prompt = f"Should I save this link for my studies? Is it safe? URL: {url}"
+
+        # Direct HTTP call to Groq API
+        headers = {
+            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "model": "llama-3.3-70b-versatile",
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            "max_tokens": 500,
+            "temperature": 0.7
+        }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(GROQ_API_URL, headers=headers, json=payload, timeout=10) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return data['choices'][0]['message']['content']
+                else:
+                    error_text = await response.text()
+                    print(f"Groq API Error: {response.status} - {error_text}")
+                    return "⚠️ AI analysis temporarily unavailable - please review manually."
+                    
+    except asyncio.TimeoutError:
+        print("AI timeout - request took too long")
+        return "⚠️ AI analysis timed out - please review manually."
+    except Exception as e:
+        print(f"AI Error: {e}")
+        return "⚠️ AI analysis failed - please review manually."
     
 async def get_ai_guidance(url: str) -> str:
     """Get AI guidance on whether a link is vital for study purposes.
