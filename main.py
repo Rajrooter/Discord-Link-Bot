@@ -19,7 +19,10 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
 if GROQ_API_KEY:
     try:
-        ai_client = Groq(api_key=GROQ_API_KEY)
+        ai_client = Groq(
+            api_key=GROQ_API_KEY,
+            # Don't pass any proxy settings
+        )
         AI_ENABLED = True
         print("✅ Groq AI enabled (FREE)")
     except Exception as e:
