@@ -17,24 +17,25 @@ from groq import Groq
 # Groq AI Configuration (FREE - No credit card needed!)
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
+# Remove proxy settings that interfere with Groq
+for key in list(os.environ.keys()):
+    if 'proxy' in key.lower():
+        del os.environ[key]
+
 if GROQ_API_KEY:
     try:
-        ai_client = Groq(
-            api_key=GROQ_API_KEY,
-            # Don't pass any proxy settings
-        )
+        ai_client = Groq(api_key=GROQ_API_KEY)
         AI_ENABLED = True
         print("✅ Groq AI enabled (FREE)")
     except Exception as e:
-        print(f"⚠️ Groq initialization failed: {e}")
-        print("⚠️ AI disabled - Check your GROQ_API_KEY")
+        print(f"⚠️ Groq error: {e}")
         ai_client = None
         AI_ENABLED = False
 else:
     ai_client = None
     AI_ENABLED = False
     print("⚠️ AI disabled - Add GROQ_API_KEY to enable")
-
+    
 async def get_ai_guidance(url: str) -> str:
     """Get AI guidance on whether a link is vital for study purposes.
     
