@@ -13,17 +13,20 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Groq AI Configuration (using direct HTTP calls instead of SDK)
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+import google.generativeai as genai
 
-if GROQ_API_KEY:
+# Google Gemini Configuration (FREE!)
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    ai_client = genai.GenerativeModel('gemini-1.5-flash')
     AI_ENABLED = True
-    print("✅ Groq AI enabled (FREE) - Using direct API")
+    print("✅ Google Gemini AI enabled (FREE)")
 else:
+    ai_client = None
     AI_ENABLED = False
-    print("⚠️ AI disabled - Add GROQ_API_KEY to enable")
-
+    print("⚠️ AI disabled - Add GEMINI_API_KEY to enable")
 async def get_ai_guidance(url: str) -> str:
     """Get AI guidance on whether a link is vital for study purposes.
     
@@ -75,35 +78,31 @@ async def get_ai_guidance(url: str) -> str:
         return "⚠️ AI analysis failed - please review manually."
     
 async def get_ai_guidance(url: str) -> str:
-    """Get AI guidance on whether a link is vital for study purposes.
-    
-    Uses Groq's FREE API with Llama 3.3 70B model.
-    """
+    """Get AI guidance on whether a link is vital for study purposes."""
     
     if not AI_ENABLED or ai_client is None:
-        return "📝 **Manual Review Needed** - AI analysis unavailable. Add GROQ_API_KEY to enable free AI analysis."
+        return "📝 **Manual Review Needed** - AI analysis unavailable."
     
     try:
-        system_prompt = (
-            "You are an educational assistant and security specialist. "
-            "Evaluate if a URL is vital for study purposes. Also check if the link looks like spam, phishing, or unsafe. "
-            "Provide a short verdict (Safe / Suspect / Unsafe), a concise reason, and a suggestion whether to save the link for study."
-        )
-        user_prompt = f"Should I save this link for my studies? Is it safe? URL: {url}"
+        prompt = f"""You are an educational assistant and security specialist.
+Evaluate if this URL is vital for study purposes and if it's safe.
 
-        # Groq API call (FREE - 30 requests/min)
+URL: {url}
+
+Provide:
+1. Verdict: Safe / Suspect / Unsafe
+2. Brief reason
+3. Recommendation to save for study or not
+
+Keep response under 100 words."""
+
+        # Gemini API call (run in thread to not block)
         response = await asyncio.to_thread(
-            ai_client.chat.completions.create,
-            model="llama-3.3-70b-versatile",  # Fast and intelligent
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            max_tokens=500,
-            temperature=0.7
+            ai_client.generate_content,
+            prompt
         )
 
-        return response.choices[0].message.content
+        return response.text
     except Exception as e:
         print(f"AI Error: {e}")
         return "⚠️ AI analysis failed - please review manually."
