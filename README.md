@@ -1,330 +1,229 @@
-# 🔗 Discord Link Manager Bot
+# 🤖 Labour Bot - AI-Powered Discord Link Manager
 
-A powerful and efficient Discord bot designed to manage, organize, and moderate links shared within your Discord server. This bot provides comprehensive link management capabilities, spam protection, and analytics to keep your community safe and organized.
+A sophisticated Discord bot that helps students and researchers manage educational resources with GPT-5 AI-powered link evaluation and smart categorization.
 
----
-
-## 📋 Table of Contents
-
-- [Features](#-features)
-- [Demo](#-demo)
-- [Prerequisites](#-prerequisites)
-- [Installation](#-installation)
-- [Configuration](#-configuration)
-- [Usage](#-usage)
-- [Commands](#-commands)
-- [Architecture](#-architecture)
-- [Contributing](#-contributing)
-- [License](#-license)
-- [Support](#-support)
-- [Acknowledgments](#-acknowledgments)
-
----
+![Python Version](https://img.shields.io/badge/python-3.8%2B-blue)
+![Discord.py](https://img.shields.io/badge/discord.py-2.3.2-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
 
 ## ✨ Features
 
-### Core Functionality
-- **Link Detection & Storage**: Automatically detects and stores all links shared in the server
-- **Link Categories**: Organize links into custom categories (Social Media, Documentation, Resources, etc.)
-- **Spam Protection**: Identifies and blocks malicious or spam links
-- **Link Analytics**: Track click counts, most shared domains, and link engagement
-- **Blacklist Management**: Maintain a blacklist of prohibited domains and URLs
-- **Whitelist System**: Configure trusted domains that bypass restrictions
+### 🔗 Smart Link Management
+- **AI-Powered Evaluation**: Automatic assessment of links using GPT-5 for educational value
+- **Security Scanning**: Built-in phishing and spam detection
+- **Interactive Saving**: React-based UI for saving and categorizing links
+- **Smart Filtering**: Automatically ignores media files (images, GIFs, videos)
 
-### Advanced Capabilities
-- **URL Shortening**: Create custom short links for frequently shared resources
-- **Link Expiry**: Set automatic expiration for time-sensitive links
-- **Permission System**: Role-based access control for link management
-- **Export Functionality**: Export link databases to CSV/JSON formats
-- **Search & Filter**: Advanced search capabilities across stored links
-- **Duplicate Detection**: Prevents spam by identifying previously shared links
+### 📚 Organization Tools
+- **Custom Categories**: Organize links into unlimited custom categories
+- **Search Functionality**: Quickly find links by keyword or category
+- **Statistics Dashboard**: Track usage patterns and popular domains
+- **Recent Links**: View your most recently saved resources
 
-### Moderation Tools
-- **Auto-Moderation**: Automatic removal of suspicious links
-- **Link Reports**: Users can report problematic links for review
-- **Audit Logs**: Comprehensive logging of all link-related activities
-- **Rate Limiting**: Prevents link spam through configurable rate limits
+### 👥 Member Onboarding
+- **Automated Welcome**: DM-based onboarding flow for new members
+- **Role Assignment**: Automatic role assignment based on member information
+- **Rule Distribution**: Automated server rules delivery
 
----
+### 🎨 Beautiful UI/UX
+- **Custom Embeds**: Adorable, color-coded Discord embeds
+- **Interactive Commands**: React-based interactions for intuitive navigation
+- **Help System**: Comprehensive help command with command details
 
-## 🎬 Demo
-Sending random link on the channel to any server
+## 📋 Prerequisites
 
-<img width="903" height="203" alt="image" src="https://github.com/user-attachments/assets/19c38d6b-3ea6-4ea5-99ec-c92bf632e20f" />
-How the bot responded 
+- Python 3.8 or higher
+- Discord Bot Token ([Get one here](https://discord.com/developers/applications))
+- OpenAI API access (via Replit AI Integrations or direct OpenAI API)
 
-<img width="1143" height="347" alt="image" src="https://github.com/user-attachments/assets/0d4f1529-2c4b-47f3-bdfd-062c05210817" />
+## 🚀 Installation
 
-## 🔧 Prerequisites
-
-Before installation, ensure you have the following:
-
-- **Python**: Version 3.8 or higher
-- **Discord Bot Token**: Obtained from [Discord Developer Portal](https://discord.com/developers/applications)
-- **Database**: SQLite (included) or PostgreSQL for production
-- **Dependencies**: Listed in `requirements.txt`
-- **Operating System**: Windows, macOS, or Linux
-
-**Recommended System Specifications:**
-- RAM: Minimum 512MB, Recommended 1GB
-- Storage: 100MB for bot files + database storage
-- Network: Stable internet connection
-
----
-
-## 📥 Installation
-
-### Step 1: Clone the Repository
+### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/yourusername/discord-link-manager-bot.git
-cd discord-link-manager-bot
+git clone https://github.com/yourusername/labour-bot.git
+cd labour-bot
 ```
 
-### Step 2: Set Up Virtual Environment
-
-```bash
-# Create virtual environment
-python -m venv venv
-
-# Activate virtual environment
-# On Windows:
-venv\Scripts\activate
-# On macOS/Linux:
-source venv/bin/activate
-```
-
-### Step 3: Install Dependencies
+### 2. Install Dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### Step 4: Configure Environment Variables
+### 3. Configure Environment Variables
 
 Create a `.env` file in the root directory:
 
-```env
-DISCORD_TOKEN=your_bot_token_here
-BOT_PREFIX=!
-LOG_LEVEL=INFO
-ADMIN_ROLE_ID=your_admin_role_id
-MODERATOR_ROLE_ID=your_moderator_role_id
-```
-
-### Step 5: Initialize Database
-
 ```bash
-python setup_database.py
+cp .env.example .env
 ```
 
-### Step 6: Run the Bot
+Edit `.env` and add your credentials:
+
+```env
+DISCORD_TOKEN=your_discord_bot_token_here
+AI_INTEGRATIONS_OPENAI_API_KEY=your_openai_api_key
+AI_INTEGRATIONS_OPENAI_BASE_URL=https://api.openai.com/v1
+```
+
+### 4. Set Up Discord Bot
+
+1. Go to [Discord Developer Portal](https://discord.com/developers/applications)
+2. Create a new application
+3. Navigate to the "Bot" section
+4. Enable these Privileged Gateway Intents:
+   - Message Content Intent
+   - Server Members Intent
+5. Copy your bot token and add it to `.env`
+6. Use this invite link (replace CLIENT_ID with your application ID):
+   ```
+   https://discord.com/api/oauth2/authorize?client_id=CLIENT_ID&permissions=8&scope=bot
+   ```
+
+### 5. Run the Bot
 
 ```bash
 python main.py
 ```
 
----
+## 🎮 Commands
 
-## ⚙️ Configuration
+### Link Management Commands
 
-### config.yml Structure
+| Command | Description | Usage |
+|---------|-------------|-------|
+| `!category [name]` | Assign category to pending link | `!category Computer Science` |
+| `!cancel` | Cancel pending link save | `!cancel` |
+| `!getlinks [category]` | Retrieve all links or by category | `!getlinks` or `!getlinks Python` |
+| `!categories` | List all categories | `!categories` |
+| `!deletelink [number]` | Delete a specific link | `!deletelink 5` |
+| `!deletecategory [name]` | Delete category and its links | `!deletecategory Physics` |
+| `!clearlinks` | Clear all links (Admin only) | `!clearlinks` |
+| `!searchlinks [term]` | Search for links | `!searchlinks machine learning` |
+| `!analyze [url]` | Get AI analysis of a link | `!analyze https://example.com` |
+| `!stats` | Show statistics | `!stats` |
+| `!recent` | Show 5 most recent links | `!recent` |
 
-```yaml
-bot:
-  prefix: "!"
-  status: "Managing links | !help"
-  activity_type: "watching"
+### General Commands
 
-links:
-  max_per_message: 5
-  auto_categorize: true
-  default_category: "General"
-  
-moderation:
-  auto_delete_suspicious: true
-  suspicious_keywords: ["click here", "free money", "limited offer"]
-  rate_limit:
-    messages: 10
-    per_seconds: 60
-  
-categories:
-  - "Social Media"
-  - "Documentation"
-  - "Resources"
-  - "Articles"
-  - "Videos"
-  - "Other"
+| Command | Description |
+|---------|-------------|
+| `!help` | Show all commands |
+| `!help [command]` | Get help for specific command |
+
+## 🔧 Configuration
+
+### Customizing Categories
+
+Edit `categories.json` to pre-define categories:
+
+```json
+{
+  "Computer Science": [],
+  "Mathematics": [],
+  "Research Papers": []
+}
 ```
 
- ### Customization Options
+### Customizing Server Rules
 
-**1. Prefix Configuration**
-- Change the command prefix in `config.yml` under `bot.prefix`
-- Default: `!`
+Edit `server_rules.txt` to set your server rules for onboarding.
 
-**2. Category Management**
-- Add custom categories in the `categories` section
-- Categories help organize links by type
+### Customizing Ignored Media Extensions
 
----
+In `main.py`, modify the `IGNORED_EXTENSIONS` list:
 
-## 🎮 Usage
+```python
+IGNORED_EXTENSIONS = [
+    '.gif', '.png', '.jpg', '.jpeg', '.webp', '.bmp'
+]
+```
 
-<img width="1064" height="389" alt="image" src="https://github.com/user-attachments/assets/f8622a1f-f12d-44f0-a90b-e5d6f834dfda" />
+## 🏗️ Architecture
 
+### File Structure
 
-
-## 📜 Commands
-
-### Complete Command Reference
-
-| Command | Permission | Description |
-|---------|-----------|-------------|
-| `!help` | Everyone | Display help menu with all commands |
-| `!links [page]` | Everyone | View paginated list of recent links |
-| `!link search <query>` | Everyone | Search links by URL, title, or user |
-| `!link info <id>` | Everyone | Display detailed link information |
-| `!link category <name>` | Everyone | View links in specific category |
-| `!link report <id> <reason>` | Everyone | Report suspicious link |
-| `!link delete <id>` | Moderator | Remove link from database |
-| `!link blacklist add <domain>` | Moderator | Block domain server-wide |
-| `!link blacklist remove <domain>` | Moderator | Unblock domain |
-| `!link whitelist add <domain>` | Moderator | Trust domain (bypass filters) |
-| `!link whitelist remove <domain>` | Moderator | Remove from whitelist |
-| `!link stats [user]` | Moderator | View statistics for server or user |
-| `!link export <format>` | Admin | Export database (csv/json) |
-| `!link purge <days>` | Admin | Delete links older than X days |
-| `!link config show` | Admin | Display current configuration |
-| `!link config set <key> <value>` | Admin | Modify bot settings |
-
----
-
+```
+labour-bot/
+├── main.py                 # Main bot file
+├── .env                    # Environment variables (not in git)
+├── .env.example            # Environment template
+├── requirements.txt        # Python dependencies
+├── README.md              # This file
+├── LICENSE                # MIT License
+├── saved_links.json       # Saved links database
+├── categories.json        # Categories database
+├── onboarding_data.json   # Onboarding state
+└── server_rules.txt       # Server rules
+```
 
 ### Technology Stack
 
-- **Framework**: Discord.py (Python Discord API wrapper)
-- **Database**: SQLite / PostgreSQL
-- **ORM**: SQLAlchemy
-- **URL Validation**: validators, urllib
-- **Configuration**: PyYAML
-- **Environment Management**: python-dotenv
-- **Logging**: Python logging module
+- **Framework**: discord.py 2.3.2
+- **AI Integration**: OpenAI GPT-5 API
+- **Storage**: JSON-based file storage
+- **Async**: Python asyncio for non-blocking operations
 
-### Database Schema
+## 🔒 Security Features
 
-**Links Table:**
-- `id` (Primary Key)
-- `url` (Text)
-- `short_url` (Text, nullable)
-- `user_id` (BigInt)
-- `guild_id` (BigInt)
-- `channel_id` (BigInt)
-- `category` (Text)
-- `timestamp` (DateTime)
-- `clicks` (Integer)
-- `is_active` (Boolean)
-
-**Blacklist Table:**
-- `id` (Primary Key)
-- `domain` (Text, unique)
-- `added_by` (BigInt)
-- `reason` (Text)
-- `timestamp` (DateTime)
-
----
+- **Phishing Detection**: Pre-AI keyword scanning for suspicious URLs
+- **AI Security Analysis**: GPT-5 powered link safety evaluation
+- **Spam Prevention**: Automatic filtering of common spam patterns
+- **Media Filtering**: Ignores non-educational media content
 
 ## 🤝 Contributing
 
-Contributions are welcome and appreciated! Please follow these guidelines:
+Contributions are welcome! Here's how you can help:
 
-### How to Contribute
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
 
-1. **Fork the Repository**
-   ```bash
-   git clone https://github.com/yourusername/discord-link-manager-bot.git
-   ```
-
-2. **Create a Feature Branch**
-   ```bash
-   git checkout -b feature/amazing-feature
-   ```
-
-3. **Commit Your Changes**
-   ```bash
-   git commit -m "Add amazing feature"
-   ```
-
-4. **Push to Branch**
-   ```bash
-   git push origin feature/amazing-feature
-   ```
-
-5. **Open a Pull Request**
-   - Provide clear description of changes
-   - Reference any related issues
-   - Ensure all tests pass
-
-### Contribution Guidelines
+### Development Guidelines
 
 - Follow PEP 8 style guidelines
-- Write clear, descriptive commit messages
-- Add tests for new features
-- Update documentation as needed
-- Be respectful and constructive in discussions
+- Add docstrings to new functions
+- Test thoroughly before submitting PR
+- Update README if adding new features
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
+## 🐛 Known Issues
 
----
+- Large servers may experience rate limiting with onboarding
+- AI analysis may timeout on slow connections
+- JSON storage is not suitable for very large datasets (>10,000 links)
+
+## 📝 Roadmap
+
+- [ ] Database integration (PostgreSQL/MongoDB)
+- [ ] Web dashboard for link management
+- [ ] Link expiration and archiving
+- [ ] Export links to various formats (CSV, PDF)
+- [ ] Advanced analytics and visualization
+- [ ] Multi-server support with isolated data
+- [ ] Collaborative categorization
 
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-```
-MIT License
-
-Copyright (c) 2024 [Your Name]
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files...
-```
-
----
-
-## 💬 Support
-
-### Getting Help
-
-- **Discord**: [Join our support server]( https://discord.gg/TYvWXF3U9N)
-
-### Frequently Asked Questions
-
-**Q: How do I get a Discord Bot Token?**
-A: Visit the [Discord Developer Portal](https://discord.com/developers/applications), create a new application, navigate to the Bot section, and copy the token.
-
-**Q: Can I use this bot on multiple servers?**
-A: Yes! The bot supports multi-server deployment with isolated data per server.
-
-**Q: How do I update the bot?**
-A: Pull the latest changes with `git pull` and restart the bot.
-
----
-
 ## 🙏 Acknowledgments
 
-- **Discord.py Community**: For the excellent Discord API wrapper
-- **Contributors**: Thank you to all who have contributed to this project
-- **Open Source Libraries**: All dependencies that made this project possible
-- **Beta Testers**: Special thanks to our testing community
+- [discord.py](https://github.com/Rapptz/discord.py) for the Discord API wrapper
+- [OpenAI](https://openai.com/) for GPT-5 API
+- [Replit](https://replit.com/) for AI Integrations service
+
+## 📧 Support
+
+- Join our [Discord Server](https://discord.gg/TYvWXF3U9N) for community support
+- Email: rajaryan16610@gmail.com
+
+## ⚠️ Disclaimer
+
+This bot stores links and user data in local JSON files. Ensure you comply with Discord's Terms of Service and your local data protection regulations. The AI analysis is provided as-is and should not be solely relied upon for security decisions.
 
 ---
 
-## 📊 Project Stats
-
-![GitHub stars](https://img.shields.io/github/stars/yourusername/discord-link-manager-bot?style=social)
-![GitHub forks](https://img.shields.io/github/forks/yourusername/discord-link-manager-bot?style=social)
-![GitHub issues](https://img.shields.io/github/issues/yourusername/discord-link-manager-bot)
-![GitHub pull requests](https://img.shields.io/github/issues-pr/yourusername/discord-link-manager-bot)
-
----
+Made with ❤️ by [RAJ ARYAN] | [GitHub](https://github.com/Rajrooter) | [Discord](https://discord.gg/TYvWXF3U9N)
