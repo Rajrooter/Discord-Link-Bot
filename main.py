@@ -33,8 +33,8 @@ def get_ai_guidance(url):
         response = ai_client.chat.completions.create(
             model="gpt-5",
             messages=[
-                {"role": "system", "content": "You are an educational assistant. Evaluate if a URL is vital for study purposes(including all fields). Provide a concise 1-2 sentence recommendation on whether to save it or not. Focus on educational value."},
-                {"role": "user", "content": f"Should I save this link for my studies? URL: {url}"}
+                {"role": "system", "content": "You are an educational assistant and security specialist. Evaluate if a URL is vital for study purposes. ALSO, check if the link looks like spam, phishing, or malicious content. Provide a concise 1-2 sentence recommendation. If it looks dangerous, warn the user explicitly and advise NOT to save or click it. Focus on both educational value and user safety."},
+                {"role": "user", "content": f"Should I save this link for my studies? Is it safe? URL: {url}"}
             ],
             max_completion_tokens=1024
         )
@@ -42,6 +42,17 @@ def get_ai_guidance(url):
     except Exception as e:
         print(f"AI Error: {e}")
         return "Sorry, I couldn't analyze the link right now."
+
+def is_suspicious_link(url):
+    """Simple check for common phishing/spam patterns before AI processing"""
+    # Common phishing keywords in URLs
+    phishing_keywords = ['login-', 'verify-', 'secure-', 'update-account', 'banking-']
+    url_lower = url.lower()
+    
+    for kw in phishing_keywords:
+        if kw in url_lower:
+            return True
+    return False
 
 # Custom Help Command for a more "adorable" UI/UX
 class AdorableHelp(commands.HelpCommand):
