@@ -3,6 +3,7 @@ import json
 import os
 import re
 from urllib.parse import urlparse
+import asyncio
 
 import discord
 from discord.ext import commands
@@ -12,7 +13,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from openai import OpenAI
-import threading
 
 # the newest OpenAI model is "gpt-5" which was released August 7, 2025.
 # do not change this unless explicitly requested by the user
@@ -25,30 +25,46 @@ ai_client = OpenAI(
     base_url=AI_INTEGRATIONS_OPENAI_BASE_URL
 )
 
-def get_ai_guidance(url):
-    """Get AI guidance on whether a link is vital for study purposes"""
+async def get_ai_guidance(url: str) -> str:
+    """Get AI guidance on whether a link is vital for study purposes.
+
+    Runs the (potentially blocking) OpenAI call in a thread so it doesn't block the event loop.
+    """
     try:
-        # the newest OpenAI model is "gpt-5" which was released August 7, 2025.
-        # do not change this unless explicitly requested by the user
-        response = ai_client.chat.completions.create(
+        system_prompt = (
+            "You are an educational assistant and security specialist. "
+            "Evaluate if a URL is vital for study purposes. Also check if the link looks like spam, phishing, or unsafe. "
+            "Provide a short verdict (Safe / Suspect / Unsafe), a concise reason, and a suggestion whether to save the link for study."
+        )
+        user_prompt = f"Should I save this link for my studies? Is it safe? URL: {url}"
+
+        # Run the (blocking) client call in a thread
+        response = await asyncio.to_thread(
+            ai_client.chat.completions.create,
             model="gpt-5",
             messages=[
-                {"role": "system", "content": "You are an educational assistant and security specialist. Evaluate if a URL is vital for study purposes. ALSO, check if the link looks like spam, phishing, or malicious content. Provide a concise 1-2 sentence recommendation. If it looks dangerous, warn the user explicitly and advise NOT to save or click it. Focus on both educational value and user safety."},
-                {"role": "user", "content": f"Should I save this link for my studies? Is it safe? URL: {url}"}
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
             ],
             max_completion_tokens=1024
         )
-        return response.choices[0].message.content
+
+        # Try to parse the response in the formats returned by different clients
+        try:
+            return response.choices[0].message.content
+        except Exception:
+            try:
+                return response["choices"][0]["message"]["content"]
+            except Exception:
+                return str(response)
     except Exception as e:
         print(f"AI Error: {e}")
         return "Sorry, I couldn't analyze the link right now."
 
 def is_suspicious_link(url):
     """Simple check for common phishing/spam patterns before AI processing"""
-    # Common phishing keywords in URLs
     phishing_keywords = ['login-', 'verify-', 'secure-', 'update-account', 'banking-']
     url_lower = url.lower()
-    
     for kw in phishing_keywords:
         if kw in url_lower:
             return True
@@ -63,11 +79,11 @@ class AdorableHelp(commands.HelpCommand):
         embed = discord.Embed(
             title="✨ Labour Bot Command Center ✨",
             description="Hello! I'm here to help you manage your links and guide you with command 💖.",
-            color=discord.Color.from_rgb(255, 182, 193) # Soft Pink
+            color=discord.Color.from_rgb(255, 182, 193)  # Soft Pink
         )
         
-        for cog, commands in mapping.items():
-            filtered = await self.filter_commands(commands, sort=True)
+        for cog, commands_ in mapping.items():
+            filtered = await self.filter_commands(commands_, sort=True)
             command_signatures = [f"`!{c.name}`" for c in filtered]
             if command_signatures:
                 cog_name = getattr(cog, "qualified_name", "Other")
@@ -94,7 +110,7 @@ class AdorableHelp(commands.HelpCommand):
         embed = discord.Embed(
             title=f"✨ Command: !{command.name}",
             description=command.help or "No description provided.",
-            color=discord.Color.from_rgb(173, 216, 230) # Light Blue
+            color=discord.Color.from_rgb(173, 216, 230)  # Light Blue
         )
         alias = ", ".join(command.aliases)
         if alias:
@@ -124,8 +140,8 @@ CATEGORIES_FILE = "categories.json"
 ONBOARDING_FILE = "onboarding_data.json"
 RULES_FILE = "server_rules.txt"
 
-# **FIXED: Improved URL regex pattern**
-URL_REGEX = r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+[/\w\.-]*\??[/\w\.-=&%]*|www\.[^\s/$.?#].[^\s]*'
+# Improved URL regex pattern (matches http(s) and www.)
+URL_REGEX = r'(?:https?://|www\.)\S+'
 
 # File extensions to ignore
 IGNORED_EXTENSIONS = [
@@ -192,7 +208,10 @@ def load_rules():
         with open(RULES_FILE, "r") as f:
             return f.read()
     except FileNotFoundError:
-        return "📒server-rules➡ 1.Please read and acknowledge these rules to ensure our community remains a great place for everyone.\n 2. Welcome to Labour To ensure our server remains a productive, welcoming, and respectful environment for all members, please adhere to the following rules. By participating in this server, you agree to these guidelines.\n 3. Respect & Inclusivity. \n 4.To gain full access to the server, please react with a :white_check_mark: below to acknowledge that you have read, understood, and agreed to these rules.Thank you for helping us build a positive and productive community! \n"
+        return (
+            "📒server-rules➡ 1.Please read and acknowledge these rules to ensure our community remains a great place for everyone.\n"
+            "2. Welcome to Labour To ensure our server remains a pro..."
+        )
 
 def save_rules(rules):
     with open(RULES_FILE, "w") as f:
@@ -365,23 +384,25 @@ class LinkManager(commands.Cog):
                     pass
                 return  # **IMPORTANT: Return after handling onboarding**
 
-        # **FIXED: Now check for links (only if not in onboarding)**
-        urls = re.findall(URL_REGEX, message.content)
-        print(f"DEBUG: Found URLs: {urls}")  # **DEBUG: Add this to see what URLs are detected**
+        # Now check for links (only if not in onboarding)
+        try:
+            urls = [m.group(0) for m in re.finditer(URL_REGEX, message.content)]
+        except re.error as e:
+            print(f"Regex error while finding URLs: {e}")
+            urls = []
+
+        print(f"DEBUG: Found URLs: {urls}")  # Debug
 
         if urls:
-            # Extract just the URL from the regex match groups
-            found_links = [url[0] if isinstance(url, tuple) else url for url in urls]
-
             # Filter out media URLs to reduce noise
-            non_media_links = [link for link in found_links if not is_media_url(link)]
+            non_media_links = [link for link in urls if not is_media_url(link)]
 
-            print(f"DEBUG: Non-media links: {non_media_links}")  # **DEBUG: See filtered links**
+            print(f"DEBUG: Non-media links: {non_media_links}")  # Debug
 
             # Ask before saving non-media links
             for link in non_media_links:
-                # Get AI guidance
-                guidance = get_ai_guidance(link)
+                # Get AI guidance (await the async function)
+                guidance = await get_ai_guidance(link)
                 
                 # Send a message asking if the user wants to save the link with AI advice
                 ask_msg = await message.channel.send(
@@ -682,11 +703,10 @@ class LinkManager(commands.Cog):
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload):
-        # **FIXED: Handle onboarding reactions properly**
+        # Handle onboarding reactions properly
         if payload.user_id == self.bot.user.id:
             return
 
-        # **FIXED: Get member properly**
         guild = self.bot.get_guild(payload.guild_id)
         if not guild:
             return
@@ -722,10 +742,11 @@ class LinkManager(commands.Cog):
             await message.remove_reaction(payload.emoji, member)
         except:
             pass
+
     @commands.command(name='analyze', help=':- Get AI guidance on a specific link')
     async def analyze_link(self, ctx, url):
         async with ctx.typing():
-            guidance = get_ai_guidance(url)
+            guidance = await get_ai_guidance(url)
             embed = discord.Embed(
                 title="AI Study Guidance",
                 description=guidance,
