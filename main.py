@@ -12,24 +12,29 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-from openai import OpenAI
+from groq import Groq
 
-# the newest OpenAI model is "gpt-5" which was released August 7, 2025.
-# do not change this unless explicitly requested by the user
-AI_INTEGRATIONS_OPENAI_API_KEY = os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY")
-AI_INTEGRATIONS_OPENAI_BASE_URL = os.environ.get("AI_INTEGRATIONS_OPENAI_BASE_URL")
+# Groq AI Configuration (FREE - No credit card needed!)
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
-# This is using Replit's AI Integrations service, which provides OpenAI-compatible API access without requiring your own OpenAI API key.
-ai_client = OpenAI(
-    api_key=AI_INTEGRATIONS_OPENAI_API_KEY,
-    base_url=AI_INTEGRATIONS_OPENAI_BASE_URL
-)
+if GROQ_API_KEY:
+    ai_client = Groq(api_key=GROQ_API_KEY)
+    AI_ENABLED = True
+    print("✅ Groq AI enabled (FREE)")
+else:
+    ai_client = None
+    AI_ENABLED = False
+    print("⚠️ AI disabled - Add GROQ_API_KEY to enable")
 
 async def get_ai_guidance(url: str) -> str:
     """Get AI guidance on whether a link is vital for study purposes.
-
-    Runs the (potentially blocking) OpenAI call in a thread so it doesn't block the event loop.
+    
+    Uses Groq's FREE API with Llama 3.3 70B model.
     """
+    
+    if not AI_ENABLED or ai_client is None:
+        return "📝 **Manual Review Needed** - AI analysis unavailable. Add GROQ_API_KEY to enable free AI analysis."
+    
     try:
         system_prompt = (
             "You are an educational assistant and security specialist. "
@@ -38,28 +43,22 @@ async def get_ai_guidance(url: str) -> str:
         )
         user_prompt = f"Should I save this link for my studies? Is it safe? URL: {url}"
 
-        # Run the (blocking) client call in a thread
+        # Groq API call (FREE - 30 requests/min)
         response = await asyncio.to_thread(
             ai_client.chat.completions.create,
-            model="gpt-5",
+            model="llama-3.3-70b-versatile",  # Fast and intelligent
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
-            max_completion_tokens=1024
+            max_tokens=500,
+            temperature=0.7
         )
 
-        # Try to parse the response in the formats returned by different clients
-        try:
-            return response.choices[0].message.content
-        except Exception:
-            try:
-                return response["choices"][0]["message"]["content"]
-            except Exception:
-                return str(response)
+        return response.choices[0].message.content
     except Exception as e:
         print(f"AI Error: {e}")
-        return "Sorry, I couldn't analyze the link right now."
+        return "⚠️ AI analysis failed - please review manually."
 
 def is_suspicious_link(url):
     """Simple check for common phishing/spam patterns before AI processing"""
@@ -81,7 +80,7 @@ class AdorableHelp(commands.HelpCommand):
             description="Hello! I'm here to help you manage your links and guide you with command 💖.",
             color=discord.Color.from_rgb(255, 182, 193)  # Soft Pink
         )
-        
+
         for cog, commands_ in mapping.items():
             filtered = await self.filter_commands(commands_, sort=True)
             command_signatures = [f"`!{c.name}`" for c in filtered]
@@ -89,7 +88,7 @@ class AdorableHelp(commands.HelpCommand):
                 cog_name = getattr(cog, "qualified_name", "Other")
                 if cog_name == "LinkManager":
                     cog_name = "🔗 Link Management"
-                
+
                 embed.add_field(
                     name=cog_name,
                     value=" ".join(command_signatures),
@@ -101,8 +100,22 @@ class AdorableHelp(commands.HelpCommand):
             value="Type `!help [command]` to see more details about a specific magic trick! ✨",
             inline=False
         )
-        embed.set_footer(text="Digital Labour")
         
+        if AI_ENABLED:
+            embed.add_field(
+                name="🤖 AI Status",
+                value="✅ **Groq AI Enabled** - Free link analysis powered by Llama 3.3",
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="🤖 AI Status",
+                value="⚠️ **AI Disabled** - Get free AI by adding GROQ_API_KEY (visit console.groq.com)",
+                inline=False
+            )
+            
+        embed.set_footer(text="Digital Labour • Powered by Groq AI (Free)")
+
         channel = self.get_destination()
         await channel.send(embed=embed)
 
@@ -115,9 +128,9 @@ class AdorableHelp(commands.HelpCommand):
         alias = ", ".join(command.aliases)
         if alias:
             embed.add_field(name="Aliases", value=f"`{alias}`", inline=True)
-        
+
         embed.add_field(name="Usage", value=f"`!{command.name} {command.signature}`", inline=False)
-        
+
         channel = self.get_destination()
         await channel.send(embed=embed)
 
