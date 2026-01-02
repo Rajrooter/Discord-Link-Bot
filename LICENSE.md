@@ -1,4 +1,4 @@
-### 4. `LICENSE` (MIT License - most common for open source)
+### 4. `LICENSE` 
 ```
 MIT License
 
