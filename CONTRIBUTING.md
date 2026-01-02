@@ -38,7 +38,7 @@ We are committed to providing a welcoming and inspiring community for all. By pa
 - Publishing others' private information
 - Any conduct that would be inappropriate in a professional setting
 
-**Reporting**: If you experience or witness unacceptable behavior, please report it to [maintainer@email.com].
+**Reporting**: If you experience or witness unacceptable behavior, please report it to [rajaryan16610@gmail.com].
 
 ---
 
@@ -55,11 +55,9 @@ Before contributing, ensure you have:
 - **Basic Knowledge** of Python and Discord.py
 
 ### Find an Issue to Work On
-
-1. **Browse Issues**: Check the [issue tracker](https://github.com/yourusername/discord-link-manager-bot/issues)
-2. **Good First Issues**: Look for issues labeled `good first issue` or `beginner-friendly`
-3. **Ask Questions**: Comment on issues if you need clarification
-4. **Claim an Issue**: Comment "I'd like to work on this" to avoid duplicate efforts
+1. **Good First Issues**: Look for issues labeled `good first issue` or `beginner-friendly`
+2. **Ask Questions**: Comment on issues if you need clarification
+3. **Claim an Issue**: Comment "I'd like to work on this" to avoid duplicate efforts
 
 ### Types of Contributions
 
