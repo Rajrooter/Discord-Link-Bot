@@ -146,16 +146,12 @@ IGNORED_EXTENSIONS = [
 
 ```
 labour-bot/
-├── main.py                 # Main bot file
-├── .env                    # Environment variables (not in git)
-├── .env.example            # Environment template
-├── requirements.txt        # Python dependencies
-├── README.md              # This file
-├── LICENSE                # MIT License
-├── saved_links.json       # Saved links database
-├── categories.json        # Categories database
-├── onboarding_data.json   # Onboarding state
-└── server_rules.txt       # Server rules
+├── main.py
+├── requirements.txt
+├── runtime.txt          
+├── .env.example
+├── .gitignore
+└── ... other files
 ```
 
 ### Technology Stack
