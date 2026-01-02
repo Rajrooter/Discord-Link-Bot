@@ -39,4 +39,8 @@ Thumbs.db
 dist/
 build/
 *.egg-info/
+
+# Railway
+.railway/
 ```
+
