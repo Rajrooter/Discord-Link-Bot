@@ -1,7 +1,10 @@
+# (full file contents below)
 import datetime
 import json
 import os
 import re
+import time
+from collections import deque
 from urllib.parse import urlparse
 import asyncio
 import aiohttp
@@ -38,6 +41,13 @@ try:
 except ValueError:
     AUTO_DELETE_SECONDS = 5
 
+# Burst batching configuration
+BATCH_WINDOW_SECONDS = 3   # window length to observe link burst
+BATCH_THRESHOLD = 5        # if more than this many links arrive in window, enable batching
+
+# Confirmation timeout for accidental ❌ press
+CONFIRM_TIMEOUT = 4  # seconds before the "are you sure?" message vanishes
+
 async def get_ai_guidance(url: str) -> str:
     """Get AI guidance on whether a link is vital for study purposes."""
     
@@ -65,7 +75,8 @@ Keep response under 100 words."""
             contents=prompt
         )
 
-        return response.text
+        # Depending on the SDK, response may differ; .text is expected here
+        return getattr(response, "text", str(response))
     except Exception as e:
         print(f"AI Error: {e}")
         return "⚠️ AI analysis failed - please review manually."
@@ -248,11 +259,18 @@ class LinkManager(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
+        # pending_links keyed by bot prompt message id (for on-prompt flows)
         self.pending_links = {}
+        # pending_batches keyed by author id -> list of unprompted links (burst mode)
+        self.pending_batches = {}
+        # Confirmations keyed by confirmation message id -> data
+        self.pending_delete_confirmations = {}
         self.links_to_categorize = {}
         self.pending_category_deletion = {}
         self.pending_clear_all = {}
         self.processed_messages = set()
+        # per-channel recent link timestamps (for burst detection)
+        self.channel_link_events = {}  # channel_id -> deque of timestamps
 
     async def ensure_roles_exist(self):
         """Ensure all required roles for onboarding exist"""
@@ -363,6 +381,19 @@ class LinkManager(commands.Cog):
         except Exception as e:
             print(f"Auto-delete check error: {e}")
 
+    async def _auto_remove_confirmation(self, confirm_msg, delay=CONFIRM_TIMEOUT):
+        """Auto remove the temporary confirmation message and its pending entry."""
+        await asyncio.sleep(delay)
+        try:
+            await confirm_msg.delete()
+        except Exception:
+            pass
+        try:
+            if confirm_msg.id in self.pending_delete_confirmations:
+                del self.pending_delete_confirmations[confirm_msg.id]
+        except Exception:
+            pass
+
     @commands.Cog.listener()
     async def on_message(self, message):
         if message.author == self.bot.user or message.id in self.processed_messages:
@@ -442,7 +473,34 @@ class LinkManager(commands.Cog):
             non_media_links = [link for link in urls if not is_media_url(link)]
 
             for link in non_media_links:
-                # Get AI guidance
+                # Burst detection: record event timestamp for channel
+                ch_id = message.channel.id
+                now = time.time()
+                ch_deque = self.channel_link_events.get(ch_id)
+                if ch_deque is None:
+                    ch_deque = deque()
+                    self.channel_link_events[ch_id] = ch_deque
+
+                ch_deque.append(now)
+                # remove old timestamps
+                while ch_deque and now - ch_deque[0] > BATCH_WINDOW_SECONDS:
+                    ch_deque.popleft()
+
+                # if burst threshold exceeded -> store link in pending batch for the author (no pop)
+                if len(ch_deque) > BATCH_THRESHOLD:
+                    self.pending_batches.setdefault(message.author.id, []).append({
+                        "link": link,
+                        "original_message": message,
+                        "timestamp": now
+                    })
+                    # Optionally: silent ack or small ephemeral reaction to mark stored
+                    try:
+                        await message.add_reaction("🗂️")
+                    except Exception:
+                        pass
+                    continue
+
+                # Normal behavior: create AI prompt/pop as before
                 guidance = await get_ai_guidance(link)
                 
                 ask_msg = await message.channel.send(
@@ -461,17 +519,134 @@ class LinkManager(commands.Cog):
                     "original_message": message
                 }
 
-                # Schedule deletion of the original user message if the user doesn't react in time
+                # Schedule deletion of the original user message and prompt if no response
                 try:
                     asyncio.create_task(self._delete_if_no_response(ask_msg, message, delay=AUTO_DELETE_SECONDS))
                 except Exception as e:
                     print(f"Failed to schedule auto-delete check: {e}")
+
+    @commands.command(name='pendinglinks', help='Review your pending links captured during bursts')
+    async def pendinglinks_command(self, ctx):
+        user_id = ctx.author.id
+        batch = self.pending_batches.get(user_id, [])
+        if not batch:
+            await ctx.send(f"{ctx.author.mention}, you have no pending links.")
+            return
+
+        # For each pending link produce the normal prompt only for the calling user
+        for entry in batch:
+            link = entry["link"]
+            orig_msg = entry.get("original_message")
+            guidance = await get_ai_guidance(link)
+            ask_msg = await ctx.send(
+                f"🤖 **AI Analysis:**\n{guidance}\n\n"
+                f"📎 Save this pending link, {ctx.author.mention}?\n`{link}`\n"
+                f"React with ✅ to save or ❌ to ignore."
+            )
+            await ask_msg.add_reaction('✅')
+            await ask_msg.add_reaction('❌')
+
+            self.pending_links[ask_msg.id] = {
+                "link": link,
+                "author_id": ctx.author.id,
+                "original_message": orig_msg
+            }
+
+            try:
+                asyncio.create_task(self._delete_if_no_response(ask_msg, orig_msg, delay=AUTO_DELETE_SECONDS))
+            except Exception as e:
+                print(f"Failed to schedule auto-delete for pendinglink prompt: {e}")
+
+        # clear the user's batch once prompts are created
+        try:
+            del self.pending_batches[user_id]
+        except KeyError:
+            pass
 
     @commands.Cog.listener()
     async def on_reaction_add(self, reaction, user):
         if user == self.bot.user:
             return
 
+        # First handle confirmation replies (confirmation messages generated when author hit ❌)
+        if reaction.message.id in self.pending_delete_confirmations:
+            confirm_data = self.pending_delete_confirmations[reaction.message.id]
+            # only allow the original author to confirm/cancel
+            if user.id != confirm_data["author_id"]:
+                return
+
+            # user confirms deletion -> perform deletion
+            if str(reaction.emoji) == '✅':
+                bot_msg_id = confirm_data["bot_msg_id"]
+                # attempt to fetch pending link data
+                link_data = self.pending_links.get(bot_msg_id)
+                if link_data:
+                    # delete original message
+                    try:
+                        orig = link_data.get("original_message")
+                        if orig:
+                            await orig.delete()
+                    except discord.NotFound:
+                        pass
+                    except discord.Forbidden:
+                        print("Bot lacks permissions to delete user messages.")
+                    except Exception as e:
+                        print(f"Error deleting original message on confirmed ❌: {e}")
+
+                    # delete the bot prompt
+                    try:
+                        bot_prompt = await reaction.message.channel.fetch_message(bot_msg_id)
+                        await bot_prompt.delete()
+                    except discord.NotFound:
+                        pass
+                    except discord.Forbidden:
+                        print("Bot lacks permissions to delete messages.")
+                    except Exception:
+                        pass
+
+                    # notify optionally
+                    try:
+                        await reaction.message.channel.send(f"Link removed by {user.mention}.")
+                    except Exception:
+                        pass
+
+                    # clean up pending_links
+                    try:
+                        if bot_msg_id in self.pending_links:
+                            del self.pending_links[bot_msg_id]
+                    except Exception:
+                        pass
+
+                # remove the confirmation tracking entry and try to delete the confirmation message
+                try:
+                    if reaction.message.id in self.pending_delete_confirmations:
+                        del self.pending_delete_confirmations[reaction.message.id]
+                except Exception:
+                    pass
+                try:
+                    await reaction.message.delete()
+                except Exception:
+                    pass
+                return
+
+            # user cancels deletion -> just remove confirmation message and keep prompt
+            elif str(reaction.emoji) == '❌':
+                try:
+                    await reaction.message.channel.send(f"Deletion cancelled, {user.mention}.")
+                except Exception:
+                    pass
+                try:
+                    if reaction.message.id in self.pending_delete_confirmations:
+                        del self.pending_delete_confirmations[reaction.message.id]
+                except Exception:
+                    pass
+                try:
+                    await reaction.message.delete()
+                except Exception:
+                    pass
+                return
+
+        # Handle normal pending link prompts
         if reaction.message.id in self.pending_links:
             link_data = self.pending_links[reaction.message.id]
 
@@ -497,43 +672,30 @@ class LinkManager(commands.Cog):
                 except KeyError:
                     pass
 
-            # ❌ : Author explicitly chooses to ignore -> delete original + bot prompt immediately
+            # ❌ : Ask confirmation before deleting (prevents accidental press)
             elif str(reaction.emoji) == '❌':
-                # Delete original author's message (the uploaded link)
+                confirm_msg = await reaction.message.channel.send(
+                    f"{user.mention}, are you sure you want to remove this link? "
+                    f"React ✅ to confirm deletion or ❌ to cancel. This message will vanish shortly."
+                )
+                await confirm_msg.add_reaction('✅')
+                await confirm_msg.add_reaction('❌')
+
+                # store confirmation mapping so only the author can confirm
+                self.pending_delete_confirmations[confirm_msg.id] = {
+                    "bot_msg_id": reaction.message.id,
+                    "author_id": user.id
+                }
+
+                # schedule the confirmation message to auto-remove
                 try:
-                    orig = link_data.get("original_message")
-                    if orig:
-                        await orig.delete()
-                except discord.NotFound:
-                    pass
-                except discord.Forbidden:
-                    print("Bot lacks permissions to delete user messages.")
+                    asyncio.create_task(self._auto_remove_confirmation(confirm_msg, delay=CONFIRM_TIMEOUT))
                 except Exception as e:
-                    print(f"Error deleting original message on ❌: {e}")
+                    print(f"Failed to schedule confirmation auto-remove: {e}")
 
-                # Delete the bot prompt message as well
-                try:
-                    await reaction.message.delete()
-                except discord.NotFound:
-                    pass
-                except discord.Forbidden:
-                    print("Bot lacks permissions to delete its own message.")
-                except Exception as e:
-                    print(f"Error deleting bot message on ❌: {e}")
+                return
 
-                # Notify (optional) that the author's link was removed
-                try:
-                    await reaction.message.channel.send(f"Link removed by {user.mention}.")
-                except Exception:
-                    pass
-
-                # Remove pending entry to prevent scheduled deletion or later processing
-                try:
-                    if reaction.message.id in self.pending_links:
-                        del self.pending_links[reaction.message.id]
-                except Exception:
-                    pass
-
+        # CATEGORY deletion and CLEAR ALL flows remain the same as before
         elif reaction.message.id in self.pending_category_deletion:
             deletion_data = self.pending_category_deletion[reaction.message.id]
 
