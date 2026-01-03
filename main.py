@@ -974,24 +974,17 @@ class LinkManager(commands.Cog):
             link = link_data["link"]
             message = link_data["message"]
 
-            links = load_links()
-            categories = load_categories()
-
             timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             link_entry = {
                 "url": link,
                 "timestamp": timestamp,
-                "author": str(message.author),
+                "author": str(message.author) if message else "Unknown",
                 "category": category_name
             }
 
-            links.append(link_entry)
-            save_links(links)
-
-            if category_name not in categories:
-                categories[category_name] = []
-            categories[category_name].append(link)
-            save_categories(categories)
+            # Save link to storage
+            await asyncio.to_thread(storage.add_saved_link, link_entry)
+            await asyncio.to_thread(storage.add_link_to_category, category_name, link)
 
             await ctx.send(f"✅ Link saved to '{category_name}', {ctx.author.mention}!")
 
