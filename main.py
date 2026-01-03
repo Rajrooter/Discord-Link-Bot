@@ -15,18 +15,22 @@ load_dotenv()
 
 import google.generativeai as genai
 
-# Google Gemini Configuration (FREE!)
+# ============================================
+# FIXED GOOGLE GEMINI CONFIGURATION
+# ============================================
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
-    ai_client = genai.GenerativeModel('gemini-1.5-flash')
+    # FIXED: Use the correct model - gemini-2.0-flash-exp
+    ai_client = genai.GenerativeModel('gemini-2.0-flash-exp')
     AI_ENABLED = True
-    print("✅ Google Gemini AI enabled (FREE)")
+    print("✅ Google Gemini AI enabled (gemini-2.0-flash-exp)")
 else:
     ai_client = None
     AI_ENABLED = False
-    print("⚠️ AI disabled - Add GEMINI_API_KEY to enable")  
+    print("⚠️ AI disabled - Add GEMINI_API_KEY to enable")
+
 async def get_ai_guidance(url: str) -> str:
     """Get AI guidance on whether a link is vital for study purposes."""
     
@@ -41,8 +45,9 @@ URL: {url}
 
 Provide:
 1. Verdict: Safe / Suspect / Unsafe
-2. Brief reason
-3. Recommendation to save for study or not
+2. Brief reason (1-2 sentences)
+3. Study Value: High / Medium / Low
+4. Recommendation: Save or Skip
 
 Keep response under 100 words."""
 
@@ -74,7 +79,7 @@ class AdorableHelp(commands.HelpCommand):
     async def send_bot_help(self, mapping):
         embed = discord.Embed(
             title="✨ Labour Bot Command Center ✨",
-            description="Hello! I'm here to help you manage your links and guide you with command 💖.",
+            description="Hello! I'm here to help you manage your links and guide you with commands 💖",
             color=discord.Color.from_rgb(255, 182, 193)  # Soft Pink
         )
 
@@ -94,24 +99,24 @@ class AdorableHelp(commands.HelpCommand):
 
         embed.add_field(
             name="💡 Quick Tip",
-            value="Type `!help [command]` to see more details about a specific magic trick! ✨",
+            value="Type `!help [command]` to see more details! ✨",
             inline=False
         )
         
         if AI_ENABLED:
             embed.add_field(
                 name="🤖 AI Status",
-                value="✅ **Groq AI Enabled** - Free link analysis powered by Llama 3.3",
+                value="✅ **Google Gemini AI Enabled** - Free link analysis powered by Gemini 2.0",
                 inline=False
             )
         else:
             embed.add_field(
                 name="🤖 AI Status",
-                value="⚠️ **AI Disabled** - Get free AI by adding GROQ_API_KEY (visit console.groq.com)",
+                value="⚠️ **AI Disabled** - Get free AI by adding GEMINI_API_KEY",
                 inline=False
             )
             
-        embed.set_footer(text="Digital Labour • Powered by Groq AI (Free)")
+        embed.set_footer(text="Digital Labour • Powered by Google Gemini (Free)")
 
         channel = self.get_destination()
         await channel.send(embed=embed)
@@ -155,7 +160,7 @@ URL_REGEX = r'(?:https?://|www\.)\S+'
 
 # File extensions to ignore
 IGNORED_EXTENSIONS = [
-    '.gif', '.png', '.jpg', '.jpeg', '.webp', '.bmp'
+    '.gif', '.png', '.jpg', '.jpeg', '.webp', '.bmp', '.mp4', '.mov', '.avi'
 ]
 
 def is_media_url(url):
@@ -179,7 +184,7 @@ def is_media_url(url):
     except:
         return False
 
-# Load data from files
+# Load/Save functions
 def load_links():
     try:
         with open(LINKS_FILE, "r") as f:
@@ -219,8 +224,11 @@ def load_rules():
             return f.read()
     except FileNotFoundError:
         return (
-            "📒server-rules➡ 1.Please read and acknowledge these rules to ensure our community remains a great place for everyone.\n"
-            "2. Welcome to Labour To ensure our server remains a pro..."
+            "📒 Server Rules:\n"
+            "1. Please read and acknowledge these rules to ensure our community remains a great place for everyone.\n"
+            "2. Welcome to Labour - Be respectful and helpful.\n"
+            "3. Share educational content only.\n"
+            "4. No spam or inappropriate links."
         )
 
 def save_rules(rules):
@@ -267,11 +275,9 @@ class LinkManager(commands.Cog):
     @commands.Cog.listener()
     async def on_member_join(self, member):
         """Handle new member joins with onboarding process"""
-
-        # Send welcome DM with onboarding instructions
         try:
             embed = discord.Embed(
-                title="Welcome to the Labour!",
+                title="Welcome to Labour!",
                 description="Please complete the onboarding process to access all channels.",
                 color=discord.Color.blue()
             )
@@ -288,7 +294,6 @@ class LinkManager(commands.Cog):
 
             await member.send(embed=embed)
 
-            # Send rules
             rules = load_rules()
             rules_embed = discord.Embed(
                 title="Server Rules",
@@ -298,9 +303,8 @@ class LinkManager(commands.Cog):
             await member.send(embed=rules_embed)
 
         except discord.Forbidden:
-            # Can't send DM, notify in a designated channel
             for channel in member.guild.channels:
-                if channel.name == "general" or channel.name == "welcome":
+                if channel.name in ["general", "welcome"]:
                     await channel.send(
                         f"{member.mention}, welcome! Please enable DMs to complete onboarding, "
                         f"or use `!startonboarding` in this channel."
@@ -309,28 +313,22 @@ class LinkManager(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
-        print(f'{self.bot.user} has connected to Discord!')
-        print(f'Labour is ready to rock {self.bot.user}!')
-        # Ensure required roles exist
+        print(f'✅ {self.bot.user} has connected to Discord!')
+        print(f'🤖 Labour Bot is ready!')
         await self.ensure_roles_exist()
 
     @commands.Cog.listener()
     async def on_message(self, message):
-        # Then check for links and onboarding
         if message.author == self.bot.user or message.id in self.processed_messages:
             return
 
-        # Mark this message as processed
         self.processed_messages.add(message.id)
-
-        # Process commands AFTER ensuring it's not a bot message and hasn't been processed
         await self.bot.process_commands(message)
 
-        # Clean up old processed messages
         if len(self.processed_messages) > 1000:
             self.processed_messages = set(list(self.processed_messages)[-1000:])
 
-        # Check for onboarding text responses FIRST**
+        # Check for onboarding responses
         onboarding_data = load_onboarding_data()
         user_id = str(message.author.id)
 
@@ -338,13 +336,12 @@ class LinkManager(commands.Cog):
             user_data = onboarding_data[user_id]
 
             if user_data["state"] == "college":
-                # Save college and ask for referral
                 user_data["data"]["college"] = message.content
                 user_data["state"] = "referral"
 
                 embed = discord.Embed(
                     title="Onboarding - Referral",
-                    description="Who referred you to this server? (Type a name or 'None' if no referral)",
+                    description="Who referred you to this server? (Type a name or 'None')",
                     color=discord.Color.green()
                 )
 
@@ -353,21 +350,16 @@ class LinkManager(commands.Cog):
                 onboarding_data[user_id] = user_data
                 save_onboarding_data(onboarding_data)
 
-                # Delete the user's message and our previous message
                 try:
                     await message.delete()
-                    old_msg = await message.channel.fetch_message(user_data["message_id"])
-                    await old_msg.delete()
                 except:
                     pass
-                return  # **IMPORTANT: Return after handling onboarding**
+                return
 
             elif user_data["state"] == "referral":
-                # Save referral and confirm
                 user_data["data"]["referral"] = message.content
                 user_data["state"] = "confirm"
 
-                # Create summary embed
                 embed = discord.Embed(
                     title="Please Confirm Your Information",
                     color=discord.Color.blue()
@@ -387,45 +379,35 @@ class LinkManager(commands.Cog):
                 onboarding_data[user_id] = user_data
                 save_onboarding_data(onboarding_data)
 
-                # Delete the user's message
                 try:
                     await message.delete()
                 except:
                     pass
-                return  # **IMPORTANT: Return after handling onboarding**
+                return
 
-        # Now check for links (only if not in onboarding)
+        # Check for links
         try:
             urls = [m.group(0) for m in re.finditer(URL_REGEX, message.content)]
         except re.error as e:
-            print(f"Regex error while finding URLs: {e}")
+            print(f"Regex error: {e}")
             urls = []
 
-        print(f"DEBUG: Found URLs: {urls}")  # Debug
-
         if urls:
-            # Filter out media URLs to reduce noise
             non_media_links = [link for link in urls if not is_media_url(link)]
 
-            print(f"DEBUG: Non-media links: {non_media_links}")  # Debug
-
-            # Ask before saving non-media links
             for link in non_media_links:
-                # Get AI guidance (await the async function)
+                # Get AI guidance
                 guidance = await get_ai_guidance(link)
                 
-                # Send a message asking if the user wants to save the link with AI advice
                 ask_msg = await message.channel.send(
-                    f"**AI Guidance:** {guidance}\n\n"
-                    f"Save this link, {message.author.mention}?\n{link}\n"
+                    f"🤖 **AI Analysis:**\n{guidance}\n\n"
+                    f"📎 Save this link, {message.author.mention}?\n`{link}`\n"
                     f"React with ✅ to save or ❌ to ignore."
                 )
 
-                # Add reactions for user to choose
                 await ask_msg.add_reaction('✅')
                 await ask_msg.add_reaction('❌')
 
-                # Store message info for later reference
                 self.pending_links[ask_msg.id] = {
                     "link": link,
                     "author_id": message.author.id,
@@ -434,110 +416,87 @@ class LinkManager(commands.Cog):
 
     @commands.Cog.listener()
     async def on_reaction_add(self, reaction, user):
-        # Ignore reactions from the bot itself
         if user == self.bot.user:
             return
 
-        # Check if this is a reaction to one of our "ask to save" messages
         if reaction.message.id in self.pending_links:
             link_data = self.pending_links[reaction.message.id]
 
-            # Only the original author can decide to save the link
             if user.id != link_data["author_id"]:
                 return
 
-            # Check which reaction was added
             if str(reaction.emoji) == '✅':
-                # User wants to save the link
                 await reaction.message.channel.send(
-                    f"{user.mention}, what category would you like to assign to this link?\n"
-                    f"Type `!category [category_name]` to assign a category, or `!cancel` to cancel."
+                    f"{user.mention}, what category for this link?\n"
+                    f"Type `!category [category_name]` or `!cancel` to skip."
                 )
 
-                # Store the link for category assignment
                 self.links_to_categorize[user.id] = {
                     "link": link_data["link"],
                     "message": link_data["original_message"]
                 }
 
             elif str(reaction.emoji) == '❌':
-                # User doesn't want to save the link
-                await reaction.message.channel.send(f"Nahi save hai, {user.mention}.")
+                await reaction.message.channel.send(f"Link ignored, {user.mention}.")
 
-            # Remove the pending link
             del self.pending_links[reaction.message.id]
 
-        # Check if this is a reaction to a category deletion confirmation
         elif reaction.message.id in self.pending_category_deletion:
             deletion_data = self.pending_category_deletion[reaction.message.id]
 
-            # Only the original author can confirm
             if user.id != deletion_data["author_id"]:
                 return
 
             if str(reaction.emoji) == '✅':
-                # User confirmed deletion
                 category_name = deletion_data["category"]
                 categories = load_categories()
                 links = load_links()
 
-                # Remove all links in this category
                 links = [link for link in links if link["category"] != category_name]
                 save_links(links)
 
-                # Remove the category
                 if category_name in categories:
                     del categories[category_name]
                     save_categories(categories)
 
-                await reaction.message.channel.send(f"Category '{category_name}' and all its links have been deleted.")
+                await reaction.message.channel.send(f"Category '{category_name}' deleted.")
 
             elif str(reaction.emoji) == '❌':
-                # User cancelled deletion
-                await reaction.message.channel.send("Category deletion cancelled.")
+                await reaction.message.channel.send("Deletion cancelled.")
 
-            # Remove the pending deletion
             del self.pending_category_deletion[reaction.message.id]
 
-        # Check if this is a reaction to a clear all confirmation
         elif reaction.message.id in self.pending_clear_all:
             clear_data = self.pending_clear_all[reaction.message.id]
 
-            # Only the original author can confirm
             if user.id != clear_data["author_id"]:
                 return
 
             if str(reaction.emoji) == '✅':
-                # User confirmed clearing all links
                 links_count = len(load_links())
                 categories_count = len(load_categories())
                 save_links([])
                 save_categories({})
                 await reaction.message.channel.send(
-                    f"Sare kaand mita diye gaye hai {user.mention}. "
+                    f"All cleared, {user.mention}! "
                     f"Deleted {links_count} links and {categories_count} categories."
                 )
 
             elif str(reaction.emoji) == '❌':
-                # User cancelled clearing
-                await reaction.message.channel.send("Clear operation cancelled.")
+                await reaction.message.channel.send("Clear cancelled.")
 
-            # Remove the pending clear
             del self.pending_clear_all[reaction.message.id]
 
-    @commands.command(name='category', help=':- Assign a category to a ✅  link')
+    @commands.command(name='category', help='Assign a category to a saved link')
     async def assign_category(self, ctx, *, category_name):
-        # Check if the user has a link waiting for categorization
         if ctx.author.id in self.links_to_categorize:
             link_data = self.links_to_categorize[ctx.author.id]
             link = link_data["link"]
             message = link_data["message"]
 
-            # Load existing links and categories
             links = load_links()
             categories = load_categories()
 
-            # Create the link entry
             timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             link_entry = {
                 "url": link,
@@ -546,57 +505,50 @@ class LinkManager(commands.Cog):
                 "category": category_name
             }
 
-            # Add to links list
             links.append(link_entry)
             save_links(links)
 
-            # Update categories
             if category_name not in categories:
                 categories[category_name] = []
             categories[category_name].append(link)
             save_categories(categories)
 
-            # Send confirmation
-            await ctx.send(f"Lo hogaya ji 🫦 '{category_name}', {ctx.author.mention}!")
+            await ctx.send(f"✅ Link saved to '{category_name}', {ctx.author.mention}!")
 
-            # Remove from pending categorization
             del self.links_to_categorize[ctx.author.id]
         else:
-            await ctx.send(f"Ji koi link baki nahi hai save ko liye, {ctx.author.mention}")
+            await ctx.send(f"No pending link to categorize, {ctx.author.mention}")
 
-    @commands.command(name='cancel', help=':- Cancel saving a ❌  pending link')
+    @commands.command(name='cancel', help='Cancel saving a pending link')
     async def cancel_save(self, ctx):
         if ctx.author.id in self.links_to_categorize:
             del self.links_to_categorize[ctx.author.id]
-            await ctx.send(f"Jaa cancel ho gaya, {ctx.author.mention}, ab toh link gaya")
+            await ctx.send(f"Link save cancelled, {ctx.author.mention}")
         else:
-            await ctx.send(f"Ji category assign sahi karo, {ctx.author.mention}.")
+            await ctx.send(f"No pending link, {ctx.author.mention}")
 
-    @commands.command(name='getlinks', help=':- Retrieve all saved links or filter by category')
+    @commands.command(name='getlinks', help='Retrieve all saved links or filter by category')
     async def get_links(self, ctx, category=None):
         links = load_links()
 
         if not links:
-            await ctx.send("Hat bullakar 😑")
+            await ctx.send("No links saved yet!")
             return
 
-        # Filter by category if specified
         if category:
             filtered_links = [link for link in links if link["category"].lower() == category.lower()]
             if not filtered_links:
-                await ctx.send(f"Kuch nahi mila iss name ka  '{category}'!")
+                await ctx.send(f"No links found in category '{category}'!")
                 return
             links = filtered_links
-            title = f"Sare links '{category}':"
+            title = f"Links in '{category}':"
         else:
             title = "All saved links:"
 
-        # Format the response
         response = f"**{title}**\n\n"
         for i, link in enumerate(links, 1):
-            response += f"{i}. **{link['category']}** - {link['url']} (by {link['author']}, {link['timestamp']})\n"
+            response += f"{i}. **{link['category']}** - {link['url']}\n   *(by {link['author']}, {link['timestamp']})*\n"
 
-            # Split if response is too long
             if len(response) > 1500:
                 await ctx.send(response)
                 response = ""
@@ -604,91 +556,81 @@ class LinkManager(commands.Cog):
         if response:
             await ctx.send(response)
 
-    @commands.command(name='categories', help=':- List all categories')
+    @commands.command(name='categories', help='List all categories')
     async def list_categories(self, ctx):
         categories = load_categories()
 
         if not categories:
-            await ctx.send("Aise koi gallery nahi bani hai")
+            await ctx.send("No categories created yet!")
             return
 
-        response = "**Categories:**\n"
+        response = "**📂 Categories:**\n"
         for category, links in categories.items():
-            response += f"- {category} ({len(links)} links)\n"
+            response += f"• {category} ({len(links)} links)\n"
 
         await ctx.send(response)
 
-    @commands.command(name='deletelink', help=':- Delete a link by its number (use @getlinks to see numbers)')
+    @commands.command(name='deletelink', help='Delete a link by its number')
     async def delete_link(self, ctx, link_number: int):
         links = load_links()
 
         if not links:
-            await ctx.send("Koi link save nahi hai ji 🤣")
+            await ctx.send("No links to delete!")
             return
 
         if link_number < 1 or link_number > len(links):
-            await ctx.send(f"Invalid link number! Please use a number between 1 and {len(links)}.")
+            await ctx.send(f"Invalid number! Use 1-{len(links)}.")
             return
 
-        # Get the link to delete
         link_to_delete = links[link_number - 1]
-
-        # Remove from links list
         del links[link_number - 1]
         save_links(links)
 
-        # Remove from categories
         categories = load_categories()
         if link_to_delete["category"] in categories:
             if link_to_delete["url"] in categories[link_to_delete["category"]]:
                 categories[link_to_delete["category"]].remove(link_to_delete["url"])
-                # Remove category if empty
                 if not categories[link_to_delete["category"]]:
                     del categories[link_to_delete["category"]]
             save_categories(categories)
 
-        await ctx.send(f"Link {link_number} mit gaya {ctx.author.mention} ji")
+        await ctx.send(f"✅ Link {link_number} deleted!")
 
-    @commands.command(name='deletecategory', help=':- Delete a category and all its links')
+    @commands.command(name='deletecategory', help='Delete a category and all its links')
     async def delete_category(self, ctx, *, category_name):
         categories = load_categories()
-        links = load_links()
 
         if category_name not in categories:
             await ctx.send(f"Category '{category_name}' doesn't exist!")
             return
 
-        # Confirm deletion
         confirm_msg = await ctx.send(
-            f"Are you sure you want to delete category '{category_name}' and all its {len(categories[category_name])} links?\n"
+            f"Delete '{category_name}' and its {len(categories[category_name])} links?\n"
             f"React with ✅ to confirm or ❌ to cancel."
         )
         await confirm_msg.add_reaction('✅')
         await confirm_msg.add_reaction('❌')
 
-        # Store category for confirmation
         self.pending_category_deletion[confirm_msg.id] = {
             "category": category_name,
             "author_id": ctx.author.id
         }
 
-    @commands.command(name='clearlinks', help=':- Clear all saved links and categories (Creators only)')
+    @commands.command(name='clearlinks', help='Clear all links (Admin only)')
     @commands.has_permissions(administrator=True)
     async def clear_links(self, ctx):
-        # Confirm deletion
         confirm_msg = await ctx.send(
-            "Are you sure you want to delete ALL links and categories? This action cannot be undone.\n"
+            "⚠️ Delete ALL links and categories? This cannot be undone.\n"
             "React with ✅ to confirm or ❌ to cancel."
         )
         await confirm_msg.add_reaction('✅')
         await confirm_msg.add_reaction('❌')
 
-        # Store confirmation info
         self.pending_clear_all[confirm_msg.id] = {
             "author_id": ctx.author.id
         }
 
-    @commands.command(name='searchlinks', help=':- Search for links containing specific text')
+    @commands.command(name='searchlinks', help='Search for links')
     async def search_links(self, ctx, *, search_term):
         links = load_links()
 
@@ -696,12 +638,12 @@ class LinkManager(commands.Cog):
                    search_term.lower() in link["category"].lower()]
 
         if not results:
-            await ctx.send(f"Aap bare bullakar ho ji 🤣 '{search_term}'")
+            await ctx.send(f"No results for '{search_term}'")
             return
 
-        response = f"**Search results for '{search_term}':**\n\n"
+        response = f"**🔍 Search results for '{search_term}':**\n\n"
         for i, link in enumerate(results, 1):
-            response += f"{i}. **{link['category']}** - {link['url']} (by {link['author']}, {link['timestamp']})\n"
+            response += f"{i}. **{link['category']}** - {link['url']}\n"
 
             if len(response) > 1500:
                 await ctx.send(response)
@@ -710,66 +652,23 @@ class LinkManager(commands.Cog):
         if response:
             await ctx.send(response)
 
-
-    @commands.Cog.listener()
-    async def on_raw_reaction_add(self, payload):
-        # Handle onboarding reactions properly
-        if payload.user_id == self.bot.user.id:
-            return
-
-        guild = self.bot.get_guild(payload.guild_id)
-        if not guild:
-            return
-
-        member = guild.get_member(payload.user_id)
-        if not member:
-            return
-
-        onboarding_data = load_onboarding_data()
-        user_id = str(payload.user_id)
-
-        if user_id not in onboarding_data:
-            return
-
-        user_data = onboarding_data[user_id]
-
-        # Check if this is a reaction to our onboarding message
-        if payload.message_id != user_data["message_id"]:
-            return
-
-        # Get the channel and message
-        channel = self.bot.get_channel(payload.channel_id)
-        if not channel:
-            return
-
-        try:
-            message = await channel.fetch_message(payload.message_id)
-        except discord.NotFound:
-            return
-
-        # Remove the user's reaction so they can choose again if needed
-        try:
-            await message.remove_reaction(payload.emoji, member)
-        except:
-            pass
-
-    @commands.command(name='analyze', help=':- Get AI guidance on a specific link')
+    @commands.command(name='analyze', help='Get AI guidance on a specific link')
     async def analyze_link(self, ctx, url):
         async with ctx.typing():
             guidance = await get_ai_guidance(url)
             embed = discord.Embed(
-                title="AI Study Guidance",
+                title="🤖 AI Study Guidance",
                 description=guidance,
                 color=discord.Color.blue()
             )
-            embed.set_footer(text=f"Analyzed URL: {url}")
+            embed.set_footer(text=f"URL: {url}")
             await ctx.send(embed=embed)
 
-    @commands.command(name='stats', help=':- Show link statistics and analytics')
+    @commands.command(name='stats', help='Show link statistics')
     async def show_stats(self, ctx):
         links = load_links()
         if not links:
-            await ctx.send("Koi data nahi hai statistics dikhane ke liye! 📉")
+            await ctx.send("No data for statistics!")
             return
 
         total_links = len(links)
@@ -778,11 +677,9 @@ class LinkManager(commands.Cog):
         authors = {}
 
         for link in links:
-            # Category stats
             cat = link.get("category", "Uncategorized")
             categories[cat] = categories.get(cat, 0) + 1
             
-            # Domain stats
             try:
                 domain = urlparse(link["url"]).netloc.lower()
                 if domain.startswith('www.'):
@@ -791,18 +688,16 @@ class LinkManager(commands.Cog):
             except:
                 pass
                 
-            # Author stats
             author = link.get("author", "Unknown")
             authors[author] = authors.get(author, 0) + 1
 
-        # Sort stats
         top_categories = sorted(categories.items(), key=lambda x: x[1], reverse=True)[:5]
         top_domains = sorted(domains.items(), key=lambda x: x[1], reverse=True)[:5]
         top_authors = sorted(authors.items(), key=lambda x: x[1], reverse=True)[:5]
 
         embed = discord.Embed(
-            title="📊 Link Management Statistics",
-            description=f"Total links saved: **{total_links}**",
+            title="📊 Link Statistics",
+            description=f"Total links: **{total_links}**",
             color=discord.Color.gold()
         )
 
@@ -817,17 +712,17 @@ class LinkManager(commands.Cog):
 
         await ctx.send(embed=embed)
 
-    @commands.command(name='recent', help=':- Show 5 most recently saved links')
+    @commands.command(name='recent', help='Show 5 most recent links')
     async def show_recent(self, ctx):
         links = load_links()
         if not links:
-            await ctx.send("Abhi tak koi link save nahi hua hai! 🕒")
+            await ctx.send("No links saved yet!")
             return
 
         recent_links = links[-5:]
         recent_links.reverse()
 
-        response = "**🕒 Recently Saved Links:**\n\n"
+        response = "**🕒 Recently Saved:**\n\n"
         for i, link in enumerate(recent_links, 1):
             response += f"{i}. **[{link['category']}]** {link['url']}\n   *by {link['author']} at {link['timestamp']}*\n"
 
@@ -839,28 +734,28 @@ async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):
         pass
     elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("Bhai sahi command daal. Please check the command syntax from !help or @BotName help")
+        await ctx.send("Missing argument! Check `!help` for command syntax.")
     elif isinstance(error, commands.CheckFailure):
         await ctx.send("You don't have permission to use this command.")
     elif isinstance(error, commands.BadArgument):
-        await ctx.send("Invalid argument type. Please provide a valid number for the link.")
+        await ctx.send("Invalid argument type. Please provide a valid value.")
     else:
         print(f"Error: {error}")
 
 async def main():
     token = os.getenv('DISCORD_TOKEN')
     if not token:
-        raise ValueError("DISCORD_TOKEN environment variable not set!")
+        raise ValueError("DISCORD_TOKEN not set!")
     async with bot:
         await bot.add_cog(LinkManager(bot))
         await bot.start(token)
 
 if __name__ == "__main__":
-    print("Starting bot ✅")
+    print("🚀 Starting Labour Bot...")
     TOKEN = os.getenv('DISCORD_TOKEN')
     if not TOKEN:
-        print("Error: DISCORD_TOKEN environment variable not set!")
-        print("Please create a .env file with your token: DISCORD_TOKEN=your_token_here")
+        print("❌ Error: DISCORD_TOKEN not set!")
+        print("Create .env file with: DISCORD_TOKEN=your_token_here")
     else:
         import asyncio
         asyncio.run(main())
