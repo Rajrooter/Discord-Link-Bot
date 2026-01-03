@@ -2,3 +2,4 @@ discord.py
 google-genai  # NEW - replaces google-generativeai
 python-dotenv
 aiohttp
+pip install pymongo
