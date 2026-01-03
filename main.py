@@ -31,6 +31,13 @@ else:
     AI_ENABLED = False
     print("⚠️ AI disabled - Add GEMINI_API_KEY to enable")
 
+# Auto-delete configuration: enable and seconds (default 5)
+AUTO_DELETE_ENABLED = os.environ.get("AUTO_DELETE_ENABLED", "1") == "1"
+try:
+    AUTO_DELETE_SECONDS = int(os.environ.get("AUTO_DELETE_AFTER", "5"))
+except ValueError:
+    AUTO_DELETE_SECONDS = 5
+
 async def get_ai_guidance(url: str) -> str:
     """Get AI guidance on whether a link is vital for study purposes."""
     
@@ -318,6 +325,44 @@ class LinkManager(commands.Cog):
         print(f'🤖 Labour Bot is ready!')
         await self.ensure_roles_exist()
 
+    async def _delete_if_no_response(self, bot_message, original_message, delay=AUTO_DELETE_SECONDS):
+        """Delete the original user's message (and bot prompt) if user didn't react within delay."""
+        if not AUTO_DELETE_ENABLED:
+            return
+        await asyncio.sleep(delay)
+        try:
+            # If bot_message is still pending (no reaction processed), then delete original message
+            if bot_message and bot_message.id in self.pending_links:
+                # Delete original user message (the uploaded link)
+                try:
+                    if original_message:
+                        await original_message.delete()
+                except discord.NotFound:
+                    pass
+                except discord.Forbidden:
+                    print("Bot lacks permissions to delete user messages.")
+                except Exception as e:
+                    print(f"Error deleting original message: {e}")
+
+                # Optionally delete the bot prompt to reduce clutter as well
+                try:
+                    await bot_message.delete()
+                except discord.NotFound:
+                    pass
+                except discord.Forbidden:
+                    print("Bot lacks permissions to delete its own message.")
+                except Exception as e:
+                    print(f"Error deleting bot message: {e}")
+
+                # Remove the pending_links entry so on_reaction_add won't try to act on it later
+                try:
+                    if bot_message.id in self.pending_links:
+                        del self.pending_links[bot_message.id]
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"Auto-delete check error: {e}")
+
     @commands.Cog.listener()
     async def on_message(self, message):
         if message.author == self.bot.user or message.id in self.processed_messages:
@@ -409,11 +454,18 @@ class LinkManager(commands.Cog):
                 await ask_msg.add_reaction('✅')
                 await ask_msg.add_reaction('❌')
 
+                # Store pending link keyed by the bot message id
                 self.pending_links[ask_msg.id] = {
                     "link": link,
                     "author_id": message.author.id,
                     "original_message": message
                 }
+
+                # Schedule deletion of the original user message if the user doesn't react in time
+                try:
+                    asyncio.create_task(self._delete_if_no_response(ask_msg, message, delay=AUTO_DELETE_SECONDS))
+                except Exception as e:
+                    print(f"Failed to schedule auto-delete check: {e}")
 
     @commands.Cog.listener()
     async def on_reaction_add(self, reaction, user):
@@ -423,9 +475,11 @@ class LinkManager(commands.Cog):
         if reaction.message.id in self.pending_links:
             link_data = self.pending_links[reaction.message.id]
 
+            # Only allow the original author to respond to the prompt
             if user.id != link_data["author_id"]:
                 return
 
+            # ✅ : Keep original, ask for category
             if str(reaction.emoji) == '✅':
                 await reaction.message.channel.send(
                     f"{user.mention}, what category for this link?\n"
@@ -437,10 +491,48 @@ class LinkManager(commands.Cog):
                     "message": link_data["original_message"]
                 }
 
-            elif str(reaction.emoji) == '❌':
-                await reaction.message.channel.send(f"Link ignored, {user.mention}.")
+                # Remove from pending so the scheduled deletion won't remove original
+                try:
+                    del self.pending_links[reaction.message.id]
+                except KeyError:
+                    pass
 
-            del self.pending_links[reaction.message.id]
+            # ❌ : Author explicitly chooses to ignore -> delete original + bot prompt immediately
+            elif str(reaction.emoji) == '❌':
+                # Delete original author's message (the uploaded link)
+                try:
+                    orig = link_data.get("original_message")
+                    if orig:
+                        await orig.delete()
+                except discord.NotFound:
+                    pass
+                except discord.Forbidden:
+                    print("Bot lacks permissions to delete user messages.")
+                except Exception as e:
+                    print(f"Error deleting original message on ❌: {e}")
+
+                # Delete the bot prompt message as well
+                try:
+                    await reaction.message.delete()
+                except discord.NotFound:
+                    pass
+                except discord.Forbidden:
+                    print("Bot lacks permissions to delete its own message.")
+                except Exception as e:
+                    print(f"Error deleting bot message on ❌: {e}")
+
+                # Notify (optional) that the author's link was removed
+                try:
+                    await reaction.message.channel.send(f"Link removed by {user.mention}.")
+                except Exception:
+                    pass
+
+                # Remove pending entry to prevent scheduled deletion or later processing
+                try:
+                    if reaction.message.id in self.pending_links:
+                        del self.pending_links[reaction.message.id]
+                except Exception:
+                    pass
 
         elif reaction.message.id in self.pending_category_deletion:
             deletion_data = self.pending_category_deletion[reaction.message.id]
