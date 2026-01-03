@@ -13,6 +13,9 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 
+# Import storage module
+import storage
+
 # Load environment variables
 load_dotenv()
 
@@ -55,18 +58,18 @@ async def get_ai_guidance(url: str) -> str:
         return "📝 **Manual Review Needed** - AI analysis unavailable."
     
     try:
-        prompt = f"""You are an educational assistant and security specialist.
-Evaluate if this URL is vital for study purposes and if it's safe.
+        # New concise prompt: two-line format
+        prompt = f"""Evaluate this URL for study purposes and safety in exactly 2 lines:
 
 URL: {url}
 
-Provide:
-1. Verdict: Safe / Suspect / Unsafe
-2. Brief reason (1-2 sentences)
-3. Study Value: High / Medium / Low
-4. Recommendation: Save or Skip
+Format your response as:
+Line 1: Keep or Skip (single word)
+Line 2: One short sentence explaining why keep/skip and mention safety (Safe/Suspect/Unsafe)
 
-Keep response under 100 words."""
+Example response:
+Keep
+High-value educational resource for machine learning, Safe."""
 
         # NEW SDK: Use generate_content with the new API
         response = await asyncio.to_thread(
@@ -75,8 +78,11 @@ Keep response under 100 words."""
             contents=prompt
         )
 
-        # Depending on the SDK, response may differ; .text is expected here
-        return getattr(response, "text", str(response))
+        # Safely get response text
+        if hasattr(response, "text"):
+            return response.text
+        else:
+            return str(response)
     except Exception as e:
         print(f"AI Error: {e}")
         return "⚠️ AI analysis failed - please review manually."
@@ -203,39 +209,31 @@ def is_media_url(url):
     except:
         return False
 
-# Load/Save functions
+# Load/Save functions (now use storage adapter)
 def load_links():
-    try:
-        with open(LINKS_FILE, "r") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return []
+    return storage.get_saved_links()
 
 def save_links(links):
-    with open(LINKS_FILE, "w") as f:
-        json.dump(links, f, indent=4)
+    # For compatibility, clear and re-add all links
+    storage.clear_saved_links()
+    for link in links:
+        storage.add_saved_link(link)
 
 def load_categories():
-    try:
-        with open(CATEGORIES_FILE, "r") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+    return storage.get_categories()
 
 def save_categories(categories):
-    with open(CATEGORIES_FILE, "w") as f:
-        json.dump(categories, f, indent=4)
+    # For compatibility, clear and rebuild
+    storage.clear_categories()
+    for cat_name, links in categories.items():
+        for link in links:
+            storage.add_link_to_category(cat_name, link)
 
 def load_onboarding_data():
-    try:
-        with open(ONBOARDING_FILE, "r") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+    return storage.load_onboarding_data()
 
 def save_onboarding_data(data):
-    with open(ONBOARDING_FILE, "w") as f:
-        json.dump(data, f, indent=4)
+    storage.save_onboarding_data(data)
 
 def load_rules():
     try:
@@ -254,6 +252,131 @@ def save_rules(rules):
     with open(RULES_FILE, "w") as f:
         f.write(rules)
 
+
+# Discord UI Button Views
+class LinkActionView(discord.ui.View):
+    """View with Save/Ignore buttons for link management"""
+    
+    def __init__(self, link: str, author_id: int, original_message, pending_db_id: str, cog):
+        super().__init__(timeout=None)
+        self.link = link
+        self.author_id = author_id
+        self.original_message = original_message
+        self.pending_db_id = pending_db_id
+        self.cog = cog
+    
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        """Only allow the original author to interact"""
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message(
+                "This button is not for you!", 
+                ephemeral=True
+            )
+            return False
+        return True
+    
+    @discord.ui.button(label="Save", style=discord.ButtonStyle.green, emoji="✅")
+    async def save_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Handle Save button click"""
+        # Remove from DB
+        await asyncio.to_thread(storage.delete_pending_link_by_id, self.pending_db_id)
+        
+        # Remove from in-memory pending_links
+        if interaction.message.id in self.cog.pending_links:
+            del self.cog.pending_links[interaction.message.id]
+        
+        # Add to links_to_categorize
+        self.cog.links_to_categorize[self.author_id] = {
+            "link": self.link,
+            "message": self.original_message
+        }
+        
+        # Send ephemeral instruction
+        await interaction.response.send_message(
+            f"✅ Link marked for saving! Use `!category <name>` to finalize.",
+            ephemeral=True
+        )
+        
+        # Disable buttons
+        for item in self.children:
+            item.disabled = True
+        await interaction.message.edit(view=self)
+    
+    @discord.ui.button(label="Ignore", style=discord.ButtonStyle.red, emoji="❌")
+    async def ignore_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Handle Ignore button click - show confirmation"""
+        # Create confirmation view
+        confirm_view = ConfirmDeleteView(
+            self.link,
+            self.author_id,
+            self.original_message,
+            self.pending_db_id,
+            interaction.message.id,
+            self.cog
+        )
+        
+        await interaction.response.send_message(
+            "⚠️ Are you sure you want to delete this link?",
+            view=confirm_view,
+            ephemeral=True
+        )
+
+
+class ConfirmDeleteView(discord.ui.View):
+    """Confirmation view for deleting a link"""
+    
+    def __init__(self, link: str, author_id: int, original_message, pending_db_id: str, bot_msg_id: int, cog):
+        super().__init__(timeout=60)
+        self.link = link
+        self.author_id = author_id
+        self.original_message = original_message
+        self.pending_db_id = pending_db_id
+        self.bot_msg_id = bot_msg_id
+        self.cog = cog
+    
+    @discord.ui.button(label="Confirm Delete", style=discord.ButtonStyle.danger, emoji="✅")
+    async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Confirm deletion"""
+        # Delete original user message
+        try:
+            if self.original_message:
+                await self.original_message.delete()
+        except Exception as e:
+            print(f"Error deleting original message: {e}")
+        
+        # Delete bot prompt message
+        try:
+            bot_msg = await interaction.channel.fetch_message(self.bot_msg_id)
+            await bot_msg.delete()
+        except Exception as e:
+            print(f"Error deleting bot message: {e}")
+        
+        # Remove from DB
+        await asyncio.to_thread(storage.delete_pending_link_by_id, self.pending_db_id)
+        
+        # Remove from in-memory pending_links
+        if self.bot_msg_id in self.cog.pending_links:
+            del self.cog.pending_links[self.bot_msg_id]
+        
+        # Acknowledge
+        await interaction.response.send_message(
+            "🗑️ Link deleted successfully.",
+            ephemeral=True
+        )
+    
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
+    async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Cancel deletion"""
+        await interaction.response.send_message(
+            "Deletion cancelled.",
+            ephemeral=True
+        )
+        # Disable buttons
+        for item in self.children:
+            item.disabled = True
+        await interaction.message.edit(view=self)
+
+
 class LinkManager(commands.Cog):
     """Handles link saving and management functionality"""
 
@@ -271,6 +394,8 @@ class LinkManager(commands.Cog):
         self.processed_messages = set()
         # per-channel recent link timestamps (for burst detection)
         self.channel_link_events = {}  # channel_id -> deque of timestamps
+        # Track pendinglinks command invocations to avoid duplicates
+        self.pendinglinks_in_progress = set()  # set of user_ids
 
     async def ensure_roles_exist(self):
         """Ensure all required roles for onboarding exist"""
@@ -343,7 +468,7 @@ class LinkManager(commands.Cog):
         print(f'🤖 Labour Bot is ready!')
         await self.ensure_roles_exist()
 
-    async def _delete_if_no_response(self, bot_message, original_message, delay=AUTO_DELETE_SECONDS):
+    async def _delete_if_no_response(self, bot_message, original_message, pending_db_id, delay=AUTO_DELETE_SECONDS):
         """Delete the original user's message (and bot prompt) if user didn't react within delay."""
         if not AUTO_DELETE_ENABLED:
             return
@@ -372,12 +497,18 @@ class LinkManager(commands.Cog):
                 except Exception as e:
                     print(f"Error deleting bot message: {e}")
 
-                # Remove the pending_links entry so on_reaction_add won't try to act on it later
+                # Remove the pending_links entry and DB entry
                 try:
                     if bot_message.id in self.pending_links:
                         del self.pending_links[bot_message.id]
                 except Exception:
                     pass
+                
+                # Remove from DB
+                try:
+                    await asyncio.to_thread(storage.delete_pending_link_by_id, pending_db_id)
+                except Exception as e:
+                    print(f"Error deleting pending link from DB: {e}")
         except Exception as e:
             print(f"Auto-delete check error: {e}")
 
@@ -488,10 +619,21 @@ class LinkManager(commands.Cog):
 
                 # if burst threshold exceeded -> store link in pending batch for the author (no pop)
                 if len(ch_deque) > BATCH_THRESHOLD:
+                    # Save to DB immediately
+                    pending_entry = {
+                        "user_id": message.author.id,
+                        "link": link,
+                        "channel_id": message.channel.id,
+                        "original_message_id": message.id,
+                        "timestamp": datetime.datetime.utcnow().isoformat()
+                    }
+                    pending_id = await asyncio.to_thread(storage.add_pending_link, pending_entry)
+                    
                     self.pending_batches.setdefault(message.author.id, []).append({
                         "link": link,
                         "original_message": message,
-                        "timestamp": now
+                        "timestamp": now,
+                        "pending_db_id": pending_id
                     })
                     # Optionally: silent ack or small ephemeral reaction to mark stored
                     try:
@@ -500,68 +642,151 @@ class LinkManager(commands.Cog):
                         pass
                     continue
 
-                # Normal behavior: create AI prompt/pop as before
+                # Normal behavior: Save to DB immediately, create AI prompt with buttons
+                pending_entry = {
+                    "user_id": message.author.id,
+                    "link": link,
+                    "channel_id": message.channel.id,
+                    "original_message_id": message.id,
+                    "timestamp": datetime.datetime.utcnow().isoformat()
+                }
+                pending_id = await asyncio.to_thread(storage.add_pending_link, pending_entry)
+                
+                # Get AI guidance
                 guidance = await get_ai_guidance(link)
+                
+                # Create button view
+                view = LinkActionView(link, message.author.id, message, pending_id, self)
                 
                 ask_msg = await message.channel.send(
                     f"🤖 **AI Analysis:**\n{guidance}\n\n"
-                    f"📎 Save this link, {message.author.mention}?\n`{link}`\n"
-                    f"React with ✅ to save or ❌ to ignore."
+                    f"📎 Save this link, {message.author.mention}?\n`{link}`",
+                    view=view
                 )
-
-                await ask_msg.add_reaction('✅')
-                await ask_msg.add_reaction('❌')
+                
+                # Update DB with bot message ID
+                if pending_id:
+                    await asyncio.to_thread(storage.update_pending_with_bot_msg_id, pending_id, ask_msg.id)
 
                 # Store pending link keyed by the bot message id
                 self.pending_links[ask_msg.id] = {
                     "link": link,
                     "author_id": message.author.id,
-                    "original_message": message
+                    "original_message": message,
+                    "pending_db_id": pending_id
                 }
 
                 # Schedule deletion of the original user message and prompt if no response
                 try:
-                    asyncio.create_task(self._delete_if_no_response(ask_msg, message, delay=AUTO_DELETE_SECONDS))
+                    asyncio.create_task(self._delete_if_no_response(ask_msg, message, pending_id, delay=AUTO_DELETE_SECONDS))
                 except Exception as e:
                     print(f"Failed to schedule auto-delete check: {e}")
 
     @commands.command(name='pendinglinks', help='Review your pending links captured during bursts')
     async def pendinglinks_command(self, ctx):
         user_id = ctx.author.id
-        batch = self.pending_batches.get(user_id, [])
-        if not batch:
-            await ctx.send(f"{ctx.author.mention}, you have no pending links.")
+        
+        # Check if already in progress
+        if user_id in self.pendinglinks_in_progress:
+            await ctx.send(f"{ctx.author.mention}, you already have a pending links review in progress.")
             return
-
-        # For each pending link produce the normal prompt only for the calling user
-        for entry in batch:
-            link = entry["link"]
-            orig_msg = entry.get("original_message")
-            guidance = await get_ai_guidance(link)
-            ask_msg = await ctx.send(
-                f"🤖 **AI Analysis:**\n{guidance}\n\n"
-                f"📎 Save this pending link, {ctx.author.mention}?\n`{link}`\n"
-                f"React with ✅ to save or ❌ to ignore."
-            )
-            await ask_msg.add_reaction('✅')
-            await ask_msg.add_reaction('❌')
-
-            self.pending_links[ask_msg.id] = {
-                "link": link,
-                "author_id": ctx.author.id,
-                "original_message": orig_msg
-            }
-
-            try:
-                asyncio.create_task(self._delete_if_no_response(ask_msg, orig_msg, delay=AUTO_DELETE_SECONDS))
-            except Exception as e:
-                print(f"Failed to schedule auto-delete for pendinglink prompt: {e}")
-
-        # clear the user's batch once prompts are created
+        
+        # Mark as in progress
+        self.pendinglinks_in_progress.add(user_id)
+        
         try:
-            del self.pending_batches[user_id]
-        except KeyError:
-            pass
+            # Fetch from DB
+            pending_from_db = await asyncio.to_thread(storage.get_pending_links_for_user, user_id)
+            
+            # Also check in-memory batch
+            batch = self.pending_batches.get(user_id, [])
+            
+            if not pending_from_db and not batch:
+                await ctx.send(f"{ctx.author.mention}, you have no pending links.")
+                return
+
+            # Process DB pending links
+            for db_entry in pending_from_db:
+                link = db_entry.get("link")
+                pending_id = db_entry.get("_id")
+                orig_msg_id = db_entry.get("original_message_id")
+                
+                # Try to fetch original message
+                orig_msg = None
+                try:
+                    orig_msg = await ctx.channel.fetch_message(orig_msg_id)
+                except:
+                    pass
+                
+                guidance = await get_ai_guidance(link)
+                
+                # Create button view
+                view = LinkActionView(link, ctx.author.id, orig_msg, pending_id, self)
+                
+                ask_msg = await ctx.send(
+                    f"🤖 **AI Analysis:**\n{guidance}\n\n"
+                    f"📎 Save this pending link, {ctx.author.mention}?\n`{link}`",
+                    view=view
+                )
+                
+                # Update DB with bot message ID
+                if pending_id:
+                    await asyncio.to_thread(storage.update_pending_with_bot_msg_id, pending_id, ask_msg.id)
+
+                self.pending_links[ask_msg.id] = {
+                    "link": link,
+                    "author_id": ctx.author.id,
+                    "original_message": orig_msg,
+                    "pending_db_id": pending_id
+                }
+
+                try:
+                    asyncio.create_task(self._delete_if_no_response(ask_msg, orig_msg, pending_id, delay=AUTO_DELETE_SECONDS))
+                except Exception as e:
+                    print(f"Failed to schedule auto-delete for pendinglink prompt: {e}")
+            
+            # Process in-memory batch
+            for entry in batch:
+                link = entry["link"]
+                orig_msg = entry.get("original_message")
+                pending_id = entry.get("pending_db_id")
+                
+                guidance = await get_ai_guidance(link)
+                
+                view = LinkActionView(link, ctx.author.id, orig_msg, pending_id, self)
+                
+                ask_msg = await ctx.send(
+                    f"🤖 **AI Analysis:**\n{guidance}\n\n"
+                    f"📎 Save this pending link, {ctx.author.mention}?\n`{link}`",
+                    view=view
+                )
+                
+                # Update DB with bot message ID
+                if pending_id:
+                    await asyncio.to_thread(storage.update_pending_with_bot_msg_id, pending_id, ask_msg.id)
+
+                self.pending_links[ask_msg.id] = {
+                    "link": link,
+                    "author_id": ctx.author.id,
+                    "original_message": orig_msg,
+                    "pending_db_id": pending_id
+                }
+
+                try:
+                    asyncio.create_task(self._delete_if_no_response(ask_msg, orig_msg, pending_id, delay=AUTO_DELETE_SECONDS))
+                except Exception as e:
+                    print(f"Failed to schedule auto-delete for pendinglink prompt: {e}")
+
+            # Clear the user's batch once prompts are created (don't clear DB - buttons will handle that)
+            try:
+                if user_id in self.pending_batches:
+                    del self.pending_batches[user_id]
+            except KeyError:
+                pass
+        
+        finally:
+            # Remove from in-progress
+            self.pendinglinks_in_progress.discard(user_id)
 
     @commands.Cog.listener()
     async def on_reaction_add(self, reaction, user):
