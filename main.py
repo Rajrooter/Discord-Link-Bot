@@ -1221,8 +1221,13 @@ async def main():
     token = os.getenv('DISCORD_TOKEN')
     if not token:
         raise ValueError("DISCORD_TOKEN not set!")
+    print(f"[labour] Starting bot process. PID={os.getpid()}, TIME={time.time()}")
     async with bot:
+        # Guard against duplicate cog registration
+        # This check ensures LinkManager is only added once, preventing duplicate command execution
+        # that could occur from multiple registrations at import time or re-entry into main()
         # Defensive: add the cog only if not present to avoid duplicate listeners
+main
         if bot.get_cog("LinkManager") is None:
             await bot.add_cog(LinkManager(bot))
             print(f"[labour] LinkManager cog added (PID={os.getpid()})")

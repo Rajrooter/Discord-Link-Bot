@@ -156,6 +156,21 @@ python main.py
 python test_mongo.py
 ```
 
+### 8. Diagnosing Duplicate Command Execution
+
+If you experience duplicate command execution (commands running twice), check the diagnostic logs:
+
+**After restarting the bot, look for these debug prints in the console:**
+- `[labour] Starting bot process. PID=<number>, TIME=<timestamp>` - Shows when the bot starts
+- `[labour] LinkManager.__init__ called. PID=<number>` - Shows when the cog is instantiated
+- `[labour] LinkManager cog added (PID=<number>)` - Confirms successful registration
+- `[labour] on_ready called for <BotName> PID=<number>` - Shows when bot connects to Discord
+
+**Diagnosis:**
+1. **Multiple processes (different PIDs)**: If you see different PID numbers in the logs, multiple bot instances are running. Solution: Stop all instances and start only one.
+2. **Duplicate registration (same PID)**: If you see the same PID but `LinkManager.__init__` is called twice, the cog is being registered multiple times. This should not happen with the guarded `add_cog()` implementation.
+3. **Expected behavior**: You should see each diagnostic message exactly once per bot start with the same PID throughout.
+
 ## 🎮 Commands
 
 ### Link Management Commands
