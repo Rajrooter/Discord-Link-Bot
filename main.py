@@ -381,6 +381,7 @@ class LinkManager(commands.Cog):
     """Handles link saving and management functionality"""
 
     def __init__(self, bot):
+        print(f"[labour] LinkManager.__init__ called. PID={os.getpid()}")
         self.bot = bot
         # pending_links keyed by bot prompt message id (for on-prompt flows)
         self.pending_links = {}
@@ -464,6 +465,7 @@ class LinkManager(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
+        print(f"[labour] on_ready called for {self.bot.user} PID={os.getpid()}")
         print(f'✅ {self.bot.user} has connected to Discord!')
         print(f'🤖 Labour Bot is ready!')
         await self.ensure_roles_exist()
@@ -1220,7 +1222,12 @@ async def main():
     if not token:
         raise ValueError("DISCORD_TOKEN not set!")
     async with bot:
-        await bot.add_cog(LinkManager(bot))
+        # Defensive: add the cog only if not present to avoid duplicate listeners
+        if bot.get_cog("LinkManager") is None:
+            await bot.add_cog(LinkManager(bot))
+            print(f"[labour] LinkManager cog added (PID={os.getpid()})")
+        else:
+            print(f"[labour] LinkManager already loaded; skipping add_cog (PID={os.getpid()})")
         await bot.start(token)
 
 if __name__ == "__main__":
