@@ -978,7 +978,7 @@ class LinkManager(commands.Cog):
             link_entry = {
                 "url": link,
                 "timestamp": timestamp,
-                "author": str(message.author) if message else "Unknown",
+                "author": str(message.author) if (message and message.author) else "Unknown",
                 "category": category_name
             }
 
