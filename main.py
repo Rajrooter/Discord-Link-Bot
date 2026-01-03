@@ -531,7 +531,8 @@ class LinkManager(commands.Cog):
             return
 
         self.processed_messages.add(message.id)
-        await self.bot.process_commands(message)
+        # NOTE: Do NOT call bot.process_commands() here - Discord.py handles this automatically
+        # Calling it here would cause all commands to execute twice
 
         if len(self.processed_messages) > 1000:
             self.processed_messages = set(list(self.processed_messages)[-1000:])
@@ -1216,10 +1217,17 @@ async def on_command_error(ctx, error):
         print(f"Error: {error}")
 
 async def main():
+    """Main entry point for the bot.
+    
+    NOTE: The LinkManager cog is added here inside main() rather than at the module level
+    to avoid duplicate listeners and side effects on import. This ensures the cog is only
+    registered once, preventing duplicate command execution and event handling.
+    """
     token = os.getenv('DISCORD_TOKEN')
     if not token:
         raise ValueError("DISCORD_TOKEN not set!")
     async with bot:
+        # Add the LinkManager cog exactly once to avoid duplicate command execution
         await bot.add_cog(LinkManager(bot))
         await bot.start(token)
 
