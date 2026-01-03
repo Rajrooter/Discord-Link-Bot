@@ -1226,6 +1226,8 @@ async def main():
         # Guard against duplicate cog registration
         # This check ensures LinkManager is only added once, preventing duplicate command execution
         # that could occur from multiple registrations at import time or re-entry into main()
+        # Defensive: add the cog only if not present to avoid duplicate listeners
+main
         if bot.get_cog("LinkManager") is None:
             await bot.add_cog(LinkManager(bot))
             print(f"[labour] LinkManager cog added (PID={os.getpid()})")
