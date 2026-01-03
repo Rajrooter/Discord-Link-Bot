@@ -13,19 +13,19 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-import google.generativeai as genai
+# NEW Google GenAI SDK (replaces google.generativeai)
+from google import genai
 
 # ============================================
-# FIXED GOOGLE GEMINI CONFIGURATION
+# FIXED GOOGLE GEMINI CONFIGURATION - NEW SDK
 # ============================================
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    # FIXED: Use the correct model - gemini-2.0-flash-exp
-    ai_client = genai.GenerativeModel('gemini-2.0-flash-exp')
+    # NEW: Initialize the client with API key
+    ai_client = genai.Client(api_key=GEMINI_API_KEY)
     AI_ENABLED = True
-    print("✅ Google Gemini AI enabled (gemini-2.0-flash-exp)")
+    print("✅ Google Gemini AI enabled (gemini-2.0-flash-exp) - NEW SDK")
 else:
     ai_client = None
     AI_ENABLED = False
@@ -51,10 +51,11 @@ Provide:
 
 Keep response under 100 words."""
 
-        # Gemini API call (run in thread to not block)
+        # NEW SDK: Use generate_content with the new API
         response = await asyncio.to_thread(
-            ai_client.generate_content,
-            prompt
+            ai_client.models.generate_content,
+            model='gemini-2.0-flash-exp',
+            contents=prompt
         )
 
         return response.text
