@@ -17,6 +17,7 @@ env/
 ENV/
 
 # Bot data files (optional - remove these lines if you want to track them)
+pending_links.json
 saved_links.json
 categories.json
 onboarding_data.json
