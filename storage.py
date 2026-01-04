@@ -147,19 +147,22 @@ class JSONFileStorage:
             json.dump(data, f, indent=4)
     
     def add_pending_link(self, entry: Dict) -> Optional[str]:
-        """Add a pending link (returns None for file fallback)"""
+        """Add a pending link and return timestamp as ID"""
         pending = self._load_json(PENDING_LINKS_FILE)
+        timestamp = entry.get("timestamp", str(datetime.now().isoformat()))
+        entry["timestamp"] = timestamp
         pending.append(entry)
         self._save_json(PENDING_LINKS_FILE, pending)
-        return None  # File backend doesn't return IDs
+        return timestamp
     
     def update_pending_with_bot_msg_id(self, pending_id: str, bot_msg_id: int):
-        """Update pending entry with bot message ID (no-op for file backend)"""
-        # For file backend, we'll use bot_msg_id as the primary key
+        """Update pending entry with bot message ID"""
         pending = self._load_json(PENDING_LINKS_FILE)
-        # Find by user_id and link, update with bot_msg_id
-        # This is a limitation of file storage
-        pass
+        for entry in pending:
+            if entry.get("timestamp") == pending_id:
+                entry["bot_msg_id"] = bot_msg_id
+                break
+        self._save_json(PENDING_LINKS_FILE, pending)
     
     def get_pending_links_for_user(self, user_id: int) -> List[Dict]:
         """Get all pending links for a specific user"""
@@ -173,9 +176,12 @@ class JSONFileStorage:
         self._save_json(PENDING_LINKS_FILE, pending)
     
     def delete_pending_link_by_id(self, _id_str: str):
-        """Delete a pending link by its ID (no-op for file backend)"""
-        # File backend doesn't have proper IDs
-        pass
+        """Delete a pending link by its timestamp ID"""
+        if not _id_str:
+            return
+        pending = self._load_json(PENDING_LINKS_FILE)
+        pending = [link for link in pending if link.get("timestamp") != _id_str]
+        self._save_json(PENDING_LINKS_FILE, pending)
     
     def add_saved_link(self, entry: Dict):
         """Add a saved link"""

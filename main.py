@@ -13,8 +13,8 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 
-# Import storage module
 import storage
+from utils import logger, is_valid_url, RateLimiter, EventCleanup
 
 # Load environment variables
 load_dotenv()
@@ -28,14 +28,13 @@ from google import genai
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 if GEMINI_API_KEY:
-    # NEW: Initialize the client with API key
     ai_client = genai.Client(api_key=GEMINI_API_KEY)
     AI_ENABLED = True
-    print("✅ Google Gemini AI enabled (gemini-2.0-flash-exp) - NEW SDK")
+    logger.info("✅ Google Gemini AI enabled (gemini-2.0-flash-exp)")
 else:
     ai_client = None
     AI_ENABLED = False
-    print("⚠️ AI disabled - Add GEMINI_API_KEY to enable")
+    logger.warning("⚠️ AI disabled - Add GEMINI_API_KEY to enable")
 
 # Auto-delete configuration: enable and seconds (default 5)
 AUTO_DELETE_ENABLED = os.environ.get("AUTO_DELETE_ENABLED", "1") == "1"
@@ -51,15 +50,13 @@ BATCH_THRESHOLD = 5        # if more than this many links arrive in window, enab
 # Confirmation timeout for accidental ❌ press
 CONFIRM_TIMEOUT = 4  # seconds before the "are you sure?" message vanishes
 
-async def get_ai_guidance(url: str) -> str:
+async def get_ai_guidance(url: str, max_retries: int = 3) -> str:
     """Get AI guidance on whether a link is vital for study purposes."""
-    
+
     if not AI_ENABLED or ai_client is None:
         return "📝 **Manual Review Needed** - AI analysis unavailable."
-    
-    try:
-        # New concise prompt: two-line format
-        prompt = f"""Evaluate this URL for study purposes and safety in exactly 2 lines:
+
+    prompt = f"""Evaluate this URL for study purposes and safety in exactly 2 lines:
 
 URL: {url}
 
@@ -71,21 +68,30 @@ Example response:
 Keep
 High-value educational resource for machine learning, Safe."""
 
-        # NEW SDK: Use generate_content with the new API
-        response = await asyncio.to_thread(
-            ai_client.models.generate_content,
-            model='gemini-2.0-flash-exp',
-            contents=prompt
-        )
+    for attempt in range(max_retries):
+        try:
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    ai_client.models.generate_content,
+                    model='gemini-2.0-flash-exp',
+                    contents=prompt
+                ),
+                timeout=10.0
+            )
 
-        # Safely get response text
-        if hasattr(response, "text"):
-            return response.text
-        else:
+            if hasattr(response, "text"):
+                return response.text
             return str(response)
-    except Exception as e:
-        print(f"AI Error: {e}")
-        return "⚠️ AI analysis failed - please review manually."
+        except asyncio.TimeoutError:
+            if attempt == max_retries - 1:
+                logger.error(f"AI analysis timeout for {url}")
+                return "⚠️ AI analysis timeout - please review manually."
+            await asyncio.sleep(1 * (attempt + 1))
+        except Exception as e:
+            if attempt == max_retries - 1:
+                logger.error(f"AI Error after {max_retries} attempts for {url}: {e}")
+                return "⚠️ AI analysis failed - please review manually."
+            await asyncio.sleep(1 * (attempt + 1))
 
 def is_suspicious_link(url):
     """Simple check for common phishing/spam patterns before AI processing"""
@@ -256,14 +262,24 @@ def save_rules(rules):
 # Discord UI Button Views
 class LinkActionView(discord.ui.View):
     """View with Save/Ignore buttons for link management"""
-    
+
     def __init__(self, link: str, author_id: int, original_message, pending_db_id: str, cog):
-        super().__init__(timeout=None)
+        super().__init__(timeout=300)
         self.link = link
         self.author_id = author_id
         self.original_message = original_message
         self.pending_db_id = pending_db_id
         self.cog = cog
+        self.message = None
+
+    async def on_timeout(self):
+        try:
+            if self.message:
+                for item in self.children:
+                    item.disabled = True
+                await self.message.edit(view=self)
+        except Exception as e:
+            logger.debug(f"View timeout cleanup error: {e}")
     
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         """Only allow the original author to interact"""
@@ -324,7 +340,7 @@ class LinkActionView(discord.ui.View):
 
 class ConfirmDeleteView(discord.ui.View):
     """Confirmation view for deleting a link"""
-    
+
     def __init__(self, link: str, author_id: int, original_message, pending_db_id: str, bot_msg_id: int, cog):
         super().__init__(timeout=60)
         self.link = link
@@ -333,6 +349,16 @@ class ConfirmDeleteView(discord.ui.View):
         self.pending_db_id = pending_db_id
         self.bot_msg_id = bot_msg_id
         self.cog = cog
+        self.message = None
+
+    async def on_timeout(self):
+        try:
+            if self.message:
+                for item in self.children:
+                    item.disabled = True
+                await self.message.edit(view=self)
+        except Exception as e:
+            logger.debug(f"Confirm view timeout cleanup error: {e}")
     
     @discord.ui.button(label="Confirm Delete", style=discord.ButtonStyle.danger, emoji="✅")
     async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -381,22 +407,19 @@ class LinkManager(commands.Cog):
     """Handles link saving and management functionality"""
 
     def __init__(self, bot):
-        print(f"[labour] LinkManager.__init__ called. PID={os.getpid()}")
+        logger.info(f"LinkManager.__init__ called. PID={os.getpid()}")
         self.bot = bot
-        # pending_links keyed by bot prompt message id (for on-prompt flows)
         self.pending_links = {}
-        # pending_batches keyed by author id -> list of unprompted links (burst mode)
         self.pending_batches = {}
-        # Confirmations keyed by confirmation message id -> data
         self.pending_delete_confirmations = {}
         self.links_to_categorize = {}
         self.pending_category_deletion = {}
         self.pending_clear_all = {}
         self.processed_messages = set()
-        # per-channel recent link timestamps (for burst detection)
-        self.channel_link_events = {}  # channel_id -> deque of timestamps
-        # Track pendinglinks command invocations to avoid duplicates
-        self.pendinglinks_in_progress = set()  # set of user_ids
+        self.event_cleanup = EventCleanup()
+        self.rate_limiter = RateLimiter()
+        self.pendinglinks_in_progress = set()
+        self.cleanup_task = None
 
     async def ensure_roles_exist(self):
         """Ensure all required roles for onboarding exist"""
@@ -463,12 +486,34 @@ class LinkManager(commands.Cog):
                     )
                     break
 
+    async def cleanup_old_channel_events(self):
+        """Periodically clean up old channel event tracking"""
+        while True:
+            try:
+                await asyncio.sleep(3600)
+                self.event_cleanup.cleanup_memory()
+                logger.info("Cleaned up old channel events")
+            except Exception as e:
+                logger.error(f"Event cleanup error: {e}")
+
     @commands.Cog.listener()
     async def on_ready(self):
-        print(f"[labour] on_ready called for {self.bot.user} PID={os.getpid()}")
-        print(f'✅ {self.bot.user} has connected to Discord!')
-        print(f'🤖 Labour Bot is ready!')
+        logger.info(f"Bot ready: {self.bot.user} PID={os.getpid()}")
+
+        try:
+            storage_backend = storage.get_storage()
+            if isinstance(storage_backend, storage.MongoDBStorage):
+                logger.info("✅ MongoDB storage validated")
+            else:
+                logger.warning("⚠️ Using JSON file storage - MongoDB not available")
+        except Exception as e:
+            logger.error(f"Storage initialization failed: {e}")
+
         await self.ensure_roles_exist()
+
+        if not self.cleanup_task or self.cleanup_task.done():
+            self.cleanup_task = asyncio.create_task(self.cleanup_old_channel_events())
+            logger.info("Started event cleanup task")
 
     async def _delete_if_no_response(self, bot_message, original_message, pending_db_id, delay=AUTO_DELETE_SECONDS):
         """Delete the original user's message (and bot prompt) if user didn't react within delay."""
@@ -603,24 +648,17 @@ class LinkManager(commands.Cog):
             urls = []
 
         if urls:
-            non_media_links = [link for link in urls if not is_media_url(link)]
+            non_media_links = [link for link in urls if not is_media_url(link) and is_valid_url(link)]
 
             for link in non_media_links:
-                # Burst detection: record event timestamp for channel
                 ch_id = message.channel.id
                 now = time.time()
-                ch_deque = self.channel_link_events.get(ch_id)
-                if ch_deque is None:
-                    ch_deque = deque()
-                    self.channel_link_events[ch_id] = ch_deque
 
-                ch_deque.append(now)
-                # remove old timestamps
-                while ch_deque and now - ch_deque[0] > BATCH_WINDOW_SECONDS:
-                    ch_deque.popleft()
+                self.event_cleanup.add_event(ch_id, now)
+                self.event_cleanup.cleanup_old_events(ch_id, BATCH_WINDOW_SECONDS)
+                event_count = self.event_cleanup.get_event_count(ch_id, BATCH_WINDOW_SECONDS)
 
-                # if burst threshold exceeded -> store link in pending batch for the author (no pop)
-                if len(ch_deque) > BATCH_THRESHOLD:
+                if event_count > BATCH_THRESHOLD:
                     # Save to DB immediately
                     pending_entry = {
                         "user_id": message.author.id,
@@ -687,13 +725,16 @@ class LinkManager(commands.Cog):
     @commands.command(name='pendinglinks', help='Review your pending links captured during bursts')
     async def pendinglinks_command(self, ctx):
         user_id = ctx.author.id
-        
-        # Check if already in progress
+
+        if self.rate_limiter.is_limited(user_id, 'pendinglinks', cooldown=5.0):
+            remaining = self.rate_limiter.get_remaining(user_id, 'pendinglinks', cooldown=5.0)
+            await ctx.send(f"{ctx.author.mention}, please wait {remaining:.1f}s before using this command again.", delete_after=5)
+            return
+
         if user_id in self.pendinglinks_in_progress:
             await ctx.send(f"{ctx.author.mention}, you already have a pending links review in progress.")
             return
-        
-        # Mark as in progress
+
         self.pendinglinks_in_progress.add(user_id)
         
         try:
@@ -1129,6 +1170,15 @@ class LinkManager(commands.Cog):
 
     @commands.command(name='analyze', help='Get AI guidance on a specific link')
     async def analyze_link(self, ctx, url):
+        if self.rate_limiter.is_limited(ctx.author.id, 'analyze', cooldown=10.0):
+            remaining = self.rate_limiter.get_remaining(ctx.author.id, 'analyze', cooldown=10.0)
+            await ctx.send(f"{ctx.author.mention}, please wait {remaining:.1f}s before using this command again.", delete_after=5)
+            return
+
+        if not is_valid_url(url):
+            await ctx.send(f"{ctx.author.mention}, that doesn't appear to be a valid URL.", delete_after=5)
+            return
+
         async with ctx.typing():
             guidance = await get_ai_guidance(url)
             embed = discord.Embed(
@@ -1215,30 +1265,26 @@ async def on_command_error(ctx, error):
     elif isinstance(error, commands.BadArgument):
         await ctx.send("Invalid argument type. Please provide a valid value.")
     else:
-        print(f"Error: {error}")
+        logger.error(f"Command error: {error}", exc_info=True)
 
 async def main():
     token = os.getenv('DISCORD_TOKEN')
     if not token:
         raise ValueError("DISCORD_TOKEN not set!")
-    print(f"[labour] Starting bot process. PID={os.getpid()}, TIME={time.time()}")
+    logger.info(f"Starting bot process. PID={os.getpid()}, TIME={time.time()}")
     async with bot:
-        # Guard against duplicate cog registration
-        # This check ensures LinkManager is only added once, preventing duplicate command execution
-        # that could occur from multiple registrations at import time or re-entry into main()
-        # Defensive: add the cog only if not present to avoid duplicate listeners
         if bot.get_cog("LinkManager") is None:
             await bot.add_cog(LinkManager(bot))
-            print(f"[labour] LinkManager cog added (PID={os.getpid()})")
+            logger.info(f"LinkManager cog added (PID={os.getpid()})")
         else:
-            print(f"[labour] LinkManager already loaded; skipping add_cog (PID={os.getpid()})")
+            logger.info(f"LinkManager already loaded (PID={os.getpid()})")
         await bot.start(token)
 
 if __name__ == "__main__":
-    print("🚀 Starting Labour Bot...")
+    logger.info("🚀 Starting Labour Bot...")
     TOKEN = os.getenv('DISCORD_TOKEN')
     if not TOKEN:
-        print("❌ Error: DISCORD_TOKEN not set!")
+        logger.error("❌ DISCORD_TOKEN not set!")
         print("Create .env file with: DISCORD_TOKEN=your_token_here")
     else:
         import asyncio
