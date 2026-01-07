@@ -15,6 +15,17 @@ from dotenv import load_dotenv
 
 import storage
 from utils import logger, is_valid_url, RateLimiter, EventCleanup
+GUILD_ID = 1383839179846193233
+
+class MyBot(commands.Bot):
+    async def setup_hook(self):
+        try:
+            guild = discord.Object(id=GUILD_ID)
+            self.tree.copy_global_to(guild=guild)
+            synced = await self.tree.sync(guild=guild)
+            logger.info(f"✅ Synced {len(synced)} commands to guild {GUILD_ID}")
+        except Exception as e:
+            logger.error(f"Failed to sync commands in setup_hook: {e}")
 
 load_dotenv()
 
@@ -160,24 +171,13 @@ intents.message_content = True
 intents.reactions = True
 intents.members = True
 
+# create bot instance
+bot = MyBot(command_prefix=get_prefix, intents=intents, help_command=AdorableHelp())
+
 def get_prefix(bot, message):
     prefixes = ['!']
     return commands.when_mentioned_or(*prefixes)(bot, message)
 bot = commands.Bot(command_prefix=get_prefix, intents=intents, help_command=AdorableHelp())
-@bot.event
-async def setup_hook():
-    """Sync commands to specific guild for instant testing"""
-    try:
-        GUILD_ID = 1383839179846193233  
-        
-        guild = discord.Object(id=GUILD_ID)
-        bot.tree.copy_global_to(guild=guild)
-        synced = await bot.tree.sync(guild=guild)
-        
-        logger.info(f"✅ Synced {len(synced)} commands to guild {GUILD_ID}")
-        
-    except Exception as e:
-        logger.error(f"Failed to sync commands: {e}")
 LINKS_FILE = "saved_links.json"
 CATEGORIES_FILE = "categories.json"
 ONBOARDING_FILE = "onboarding_data.json"
