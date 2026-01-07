@@ -339,7 +339,7 @@ class LinkActionView(discord.ui.View):
 
 
 class MultiLinkSelectView(discord.ui.View):
-    """View for selecting multiple links with a dropdown"""
+    "View for selecting multiple links with a dropdown""
 
     def __init__(self, links: list, author_id: int, original_message, cog):
         super().__init__(timeout=300)
@@ -350,18 +350,53 @@ class MultiLinkSelectView(discord.ui.View):
         self.selected_links = []
         self.message = None
 
+        # CRITICAL FIX: Limit to 25 options (Discord's hard limit)
+        max_options = min(len(links), 25)
+        
         options = []
-        for idx, link_info in enumerate(links):
-            url = link_info["url"]
-            label = f"Link {idx + 1}"
-            if len(url) > 90:
-                url = url[:87] + "..."
-            options.append(discord.SelectOption(label=label, value=str(idx), description=url))
+        for idx in range(max_options):  # Only process first 25 links
+            try:
+                link_info = links[idx]
+                url = link_info.get("url", "")
+                
+                if not url:
+                    logger.warning(f"Link info missing URL: {link_info}")
+                    continue
+                
+                label = f"Link {idx + 1}"
+                
+                # Truncate description to fit Discord limits (100 chars max)
+                description = url
+                if len(description) > 100:
+                    description = description[:97] + "..."
+                
+                options.append(discord.SelectOption(
+                    label=label,
+                    value=str(idx),
+                    description=description
+                ))
+            except Exception as e:
+                logger.error(f"Error creating option for link {idx}: {e}")
+                continue
+        
+        # Ensure we have at least 1 option
+        if not options:
+            logger.error("No valid options created for MultiLinkSelectView")
+            # Add a dummy option to prevent crash
+            options.append(discord.SelectOption(
+                label="No valid links",
+                value="0",
+                description="Error processing links"
+            ))
+        
+        # Add warning if we had to truncate
+        if len(links) > 25:
+            logger.info(f"Truncated {len(links)} links to 25 for dropdown menu")
 
         self.add_item(discord.ui.Select(
-            placeholder="Select links to save (can choose multiple)",
+            placeholder=f"Select links to save ({min(len(links), 25)} available)",
             min_values=1,
-            max_values=min(len(links), 25),
+            max_values=min(len(options), 25),
             options=options,
             custom_id="link_selector"
         ))
@@ -387,7 +422,13 @@ class MultiLinkSelectView(discord.ui.View):
             await interaction.response.defer()
 
             if self.selected_links:
-                confirm_view = ConfirmMultiLinkView(self.links, set(self.selected_links), self.author_id, self.original_message, self.cog)
+                confirm_view = ConfirmMultiLinkView(
+                    self.links, 
+                    set(self.selected_links), 
+                    self.author_id, 
+                    self.original_message, 
+                    self.cog
+                )
                 confirm_msg = await interaction.channel.send(
                     f"✅ **{len(self.selected_links)} link(s) selected**\n\nConfirm to save these links?",
                     view=confirm_view
@@ -401,7 +442,6 @@ class MultiLinkSelectView(discord.ui.View):
             return False
 
         return True
-
 
 class ConfirmMultiLinkView(discord.ui.View):
     """Confirmation view for saving selected links"""
@@ -768,20 +808,53 @@ class LinkManager(commands.Cog):
             non_media_links = [link for link in urls if not is_media_url(link) and is_valid_url(link)]
 
             if len(non_media_links) > 1:
-                links_data = [{"url": link} for link in non_media_links]
+    # SAFETY CHECK: If too many links, batch them instead
+    if len(non_media_links) > 25:
+        await message.channel.send(
+            f"📎 **{len(non_media_links)} links detected** - that's a lot!\n\n"
+            f"Processing links in batches. Use `!pendinglinks` to review them all.\n"
+            f"_Showing first 25 in dropdown..._"
+        )
+        # Only show first 25 in dropdown, rest go to pending
+        dropdown_links = non_media_links[:25]
+        remaining_links = non_media_links[25:]
+        
+        # Add remaining to pending batch
+        for link in remaining_links:
+            pending_entry = {
+                "user_id": message.author.id,
+                "link": link,
+                "channel_id": message.channel.id,
+                "original_message_id": message.id,
+                "timestamp": datetime.datetime.utcnow().isoformat()
+            }
+            pending_id = await asyncio.to_thread(storage.add_pending_link, pending_entry)
+            
+            self.pending_batches.setdefault(message.author.id, []).append({
+                "link": link,
+                "original_message": message,
+                "timestamp": time.time(),
+                "pending_db_id": pending_id
+            })
+    else:
+        dropdown_links = non_media_links
+    
+    # Create dropdown with safe link count
+    links_data = [{"url": link} for link in dropdown_links]
 
-                embed = discord.Embed(
-                    title="📎 Multiple Links Detected",
-                    description=f"Found **{len(non_media_links)}** links in your message.\n\nSelect which ones you'd like to review from the dropdown below:",
-                    color=discord.Color.blue()
-                )
+    embed = discord.Embed(
+        title="📎 Multiple Links Detected",
+        description=f"Found **{len(non_media_links)}** links in your message.\n\n"
+                   f"Select which ones you'd like to review from the dropdown below:",
+        color=discord.Color.blue()
+    )
 
-                selection_view = MultiLinkSelectView(links_data, message.author.id, message, self)
-                prompt_msg = await message.channel.send(embed=embed, view=selection_view)
-                selection_view.message = prompt_msg
+    selection_view = MultiLinkSelectView(links_data, message.author.id, message, self)
+    prompt_msg = await message.channel.send(embed=embed, view=selection_view)
+    selection_view.message = prompt_msg
 
-                logger.info(f"Multiple links detected: {len(non_media_links)} links from {message.author}")
-                return
+    logger.info(f"Multiple links detected: {len(non_media_links)} links from {message.author}")
+    return
 
             for link in non_media_links:
                 ch_id = message.channel.id
