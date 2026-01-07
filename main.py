@@ -819,14 +819,14 @@ class LinkManager(commands.Cog):
                     embed = discord.Embed(
                         title="👋 Welcome to Digital Labour!",
                         description=(
-                            "Hi there! I'm Digital Labour 🤖\n\n"
+                            "Hi there! I'm Labour Bot with A.I. 🤖\n\n"
                             "I was made by **Raj Aryan** ❤️\n"
                             "My main job is to help you save, organize and review useful links for study and collaboration.\n\n"
                             f"My command prefix is `{prefix}` — try `{prefix}help` to see what I can do!"
                         ),
                         color=discord.Color.blurple()
                     )
-                    embed.set_footer(text="Digital Labour — saving knowledge, one link at a time")
+                    embed.set_footer(text="Digital Labour ❤️",Link="https://i.ibb.co/DfGksW6S/Chat-GPT-Image-Dec-27-2025-01-47-14-AM.png")
                     await message.channel.send(embed=embed)
                     return
         except Exception as e:
