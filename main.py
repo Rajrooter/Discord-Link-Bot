@@ -338,8 +338,8 @@ class LinkActionView(discord.ui.View):
         )
 
 
-class MultiLinkSelectionView(discord.ui.View):
-    """View for selecting which links to save from multiple links"""
+class MultiLinkSelectView(discord.ui.View):
+    """View for selecting multiple links with a dropdown"""
 
     def __init__(self, links: list, author_id: int, original_message, cog):
         super().__init__(timeout=300)
@@ -347,11 +347,24 @@ class MultiLinkSelectionView(discord.ui.View):
         self.author_id = author_id
         self.original_message = original_message
         self.cog = cog
-        self.selected_links = set()
+        self.selected_links = []
         self.message = None
 
+        options = []
         for idx, link_info in enumerate(links):
-            self.add_item(LinkToggleButton(idx, link_info["url"], self))
+            url = link_info["url"]
+            label = f"Link {idx + 1}"
+            if len(url) > 90:
+                url = url[:87] + "..."
+            options.append(discord.SelectOption(label=label, value=str(idx), description=url))
+
+        self.add_item(discord.ui.Select(
+            placeholder="Select links to save (can choose multiple)",
+            min_values=1,
+            max_values=min(len(links), 25),
+            options=options,
+            custom_id="link_selector"
+        ))
 
     async def on_timeout(self):
         try:
@@ -360,33 +373,34 @@ class MultiLinkSelectionView(discord.ui.View):
                     item.disabled = True
                 await self.message.edit(view=self)
         except Exception as e:
-            logger.debug(f"Multi-link view timeout cleanup error: {e}")
+            logger.debug(f"Multi-link view timeout error: {e}")
 
-
-class LinkToggleButton(discord.ui.Button):
-    """Button for toggling link selection"""
-
-    def __init__(self, idx: int, url: str, view: "MultiLinkSelectionView"):
-        self.idx = idx
-        self.url = url
-        self.parent_view = view
-        label = f"Link {idx + 1}"
-        super().__init__(label=label, style=discord.ButtonStyle.secondary, emoji="📎")
-
-    async def callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.parent_view.author_id:
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
             await interaction.response.send_message("This is not for you!", ephemeral=True)
-            return
+            return False
 
-        if self.idx in self.parent_view.selected_links:
-            self.parent_view.selected_links.discard(self.idx)
-            self.style = discord.ButtonStyle.secondary
-        else:
-            self.parent_view.selected_links.add(self.idx)
-            self.style = discord.ButtonStyle.success
+        if interaction.data.get("custom_id") == "link_selector":
+            values = interaction.data.get("values", [])
+            self.selected_links = [int(v) for v in values]
 
-        await interaction.response.defer()
-        await self.parent_view.message.edit(view=self.parent_view)
+            await interaction.response.defer()
+
+            if self.selected_links:
+                confirm_view = ConfirmMultiLinkView(self.links, set(self.selected_links), self.author_id, self.original_message, self.cog)
+                confirm_msg = await interaction.channel.send(
+                    f"✅ **{len(self.selected_links)} link(s) selected**\n\nConfirm to save these links?",
+                    view=confirm_view
+                )
+                confirm_view.message = confirm_msg
+
+                for item in self.children:
+                    item.disabled = True
+                await self.message.edit(view=self)
+
+            return False
+
+        return True
 
 
 class ConfirmMultiLinkView(discord.ui.View):
@@ -410,34 +424,39 @@ class ConfirmMultiLinkView(discord.ui.View):
         except Exception as e:
             logger.debug(f"Confirm multi-link view timeout error: {e}")
 
-    @discord.ui.button(label="Save Selected", style=discord.ButtonStyle.green, emoji="✅")
+    @discord.ui.button(label="Save All Selected", style=discord.ButtonStyle.green, emoji="✅")
     async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
 
+        saved_count = 0
         for idx in self.selected_indices:
-            link_info = self.links[idx]
-            link = link_info["url"]
+            try:
+                link_info = self.links[idx]
+                link = link_info["url"]
 
-            pending_entry = {
-                "user_id": interaction.user.id,
-                "link": link,
-                "channel_id": interaction.channel.id,
-                "original_message_id": self.original_message.id if self.original_message else 0,
-                "timestamp": datetime.datetime.utcnow().isoformat()
-            }
-            pending_id = await asyncio.to_thread(storage.add_pending_link, pending_entry)
+                pending_entry = {
+                    "user_id": interaction.user.id,
+                    "link": link,
+                    "channel_id": interaction.channel.id,
+                    "original_message_id": self.original_message.id if self.original_message else 0,
+                    "timestamp": datetime.datetime.utcnow().isoformat()
+                }
+                pending_id = await asyncio.to_thread(storage.add_pending_link, pending_entry)
+                saved_count += 1
 
-            self.cog.links_to_categorize[interaction.user.id] = {
-                "link": link,
-                "message": self.original_message,
-                "pending_db_id": pending_id
-            }
+                self.cog.links_to_categorize[interaction.user.id] = {
+                    "link": link,
+                    "message": self.original_message,
+                    "pending_db_id": pending_id
+                }
 
-            await interaction.channel.send(
-                f"{interaction.user.mention}, link saved to queue!\n"
-                f"Use `!category <name>` to save or `!cancel` to skip.\n"
-                f"`{link}`"
-            )
+                await interaction.channel.send(
+                    f"{interaction.user.mention}, link {saved_count} saved to queue!\n"
+                    f"Use `!category <name>` to save or `!cancel` to skip.\n"
+                    f"`{link[:100]}{'...' if len(link) > 100 else ''}`"
+                )
+            except Exception as e:
+                logger.error(f"Error saving link {idx}: {e}")
 
         for item in self.children:
             item.disabled = True
@@ -749,36 +768,19 @@ class LinkManager(commands.Cog):
             non_media_links = [link for link in urls if not is_media_url(link) and is_valid_url(link)]
 
             if len(non_media_links) > 1:
-                links_data = [{"url": link, "ai_guidance": None} for link in non_media_links]
+                links_data = [{"url": link} for link in non_media_links]
 
                 embed = discord.Embed(
                     title="📎 Multiple Links Detected",
-                    description=f"Found {len(non_media_links)} links in your message. Select which ones you'd like to review:",
+                    description=f"Found **{len(non_media_links)}** links in your message.\n\nSelect which ones you'd like to review from the dropdown below:",
                     color=discord.Color.blue()
                 )
 
-                for idx, link_info in enumerate(links_data, 1):
-                    embed.add_field(
-                        name=f"Link {idx}",
-                        value=f"`{link_info['url'][:80]}{'...' if len(link_info['url']) > 80 else ''}`",
-                        inline=False
-                    )
-
-                embed.set_footer(text="Click the buttons below to select links, then confirm")
-
-                selection_view = MultiLinkSelectionView(links_data, message.author.id, message, self)
-
+                selection_view = MultiLinkSelectView(links_data, message.author.id, message, self)
                 prompt_msg = await message.channel.send(embed=embed, view=selection_view)
                 selection_view.message = prompt_msg
 
-                async def wait_for_selection():
-                    await asyncio.sleep(300)
-                    if selection_view.selected_links and prompt_msg.id in [getattr(v, "message", {}).id for v in [selection_view] if hasattr(v, "message")]:
-                        confirm_view = ConfirmMultiLinkView(links_data, selection_view.selected_links, message.author.id, message, self)
-                        confirm_msg = await message.channel.send("**Confirm to save selected links?**", view=confirm_view)
-                        confirm_view.message = confirm_msg
-
-                asyncio.create_task(wait_for_selection())
+                logger.info(f"Multiple links detected: {len(non_media_links)} links from {message.author}")
                 return
 
             for link in non_media_links:
