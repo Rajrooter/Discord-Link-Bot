@@ -9,7 +9,6 @@ import asyncio
 import aiohttp
 
 import discord
-from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 
@@ -181,14 +180,6 @@ class MyBot(commands.Bot):
 
 # create bot instance from subclass
 bot = MyBot(command_prefix=get_prefix, intents=intents, help_command=AdorableHelp())
-
-# Example application command (slash command) so you can verify sync works:
-@app_commands.command(name="ping", description="Ping the bot (app command)")
-async def ping(interaction: discord.Interaction):
-    await interaction.response.send_message("Pong!")
-
-# register the example command on the tree (so sync has something to upload)
-bot.tree.add_command(ping)
 
 LINKS_FILE = "saved_links.json"
 CATEGORIES_FILE = "categories.json"
@@ -967,8 +958,9 @@ class LinkManager(commands.Cog):
                 except Exception as e:
                     print(f"Failed to schedule auto-delete check: {e}")
 
-    @commands.command(name='pendinglinks', help='Review your pending links captured during bursts')
-    async def pendinglinks_command(self, ctx):
+    # Converted every command to hybrid_command so they register as application commands (slash) AND still work as prefix commands
+    @commands.hybrid_command(name='pendinglinks', description='Review your pending links captured during bursts')
+    async def pendinglinks(self, ctx: commands.Context):
         user_id = ctx.author.id
 
         if self.rate_limiter.is_limited(user_id, 'pendinglinks', cooldown=5.0):
@@ -1071,153 +1063,8 @@ class LinkManager(commands.Cog):
 
             self.pendinglinks_in_progress.discard(user_id)
 
-    @commands.Cog.listener()
-    async def on_reaction_add(self, reaction, user):
-        if user == self.bot.user:
-            return
-
-        # Handle confirmation replies
-        if reaction.message.id in self.pending_delete_confirmations:
-            confirm_data = self.pending_delete_confirmations[reaction.message.id]
-            if user.id != confirm_data["author_id"]:
-                return
-
-            if str(reaction.emoji) == '✅':
-                bot_msg_id = confirm_data["bot_msg_id"]
-                link_data = self.pending_links.get(bot_msg_id)
-                if link_data:
-                    try:
-                        orig = link_data.get("original_message")
-                        if orig:
-                            await orig.delete()
-                    except:
-                        pass
-
-                    try:
-                        bot_prompt = await reaction.message.channel.fetch_message(bot_msg_id)
-                        await bot_prompt.delete()
-                    except:
-                        pass
-
-                    try:
-                        if bot_msg_id in self.pending_links:
-                            del self.pending_links[bot_msg_id]
-                    except:
-                        pass
-
-                try:
-                    if reaction.message.id in self.pending_delete_confirmations:
-                        del self.pending_delete_confirmations[reaction.message.id]
-                except:
-                    pass
-                try:
-                    await reaction.message.delete()
-                except:
-                    pass
-                return
-
-            elif str(reaction.emoji) == '❌':
-                try:
-                    if reaction.message.id in self.pending_delete_confirmations:
-                        del self.pending_delete_confirmations[reaction.message.id]
-                except:
-                    pass
-                try:
-                    await reaction.message.delete()
-                except:
-                    pass
-                return
-
-        if reaction.message.id in self.pending_links:
-            link_data = self.pending_links[reaction.message.id]
-
-            if user.id != link_data["author_id"]:
-                return
-
-            if str(reaction.emoji) == '✅':
-                await reaction.message.channel.send(
-                    f"{user.mention}, what category for this link?\n"
-                    f"Type `!category [category_name]` or `!cancel` to skip."
-                )
-
-                self.links_to_categorize[user.id] = {
-                    "link": link_data["link"],
-                    "message": link_data["original_message"]
-                }
-
-                try:
-                    del self.pending_links[reaction.message.id]
-                except KeyError:
-                    pass
-
-            elif str(reaction.emoji) == '❌':
-                confirm_msg = await reaction.message.channel.send(
-                    f"{user.mention}, are you sure you want to remove this link? "
-                    f"React ✅ to confirm deletion or ❌ to cancel."
-                )
-                await confirm_msg.add_reaction('✅')
-                await confirm_msg.add_reaction('❌')
-
-                self.pending_delete_confirmations[confirm_msg.id] = {
-                    "bot_msg_id": reaction.message.id,
-                    "author_id": user.id
-                }
-
-                try:
-                    asyncio.create_task(self._auto_remove_confirmation(confirm_msg, delay=CONFIRM_TIMEOUT))
-                except Exception as e:
-                    print(f"Failed to schedule confirmation auto-remove: {e}")
-
-                return
-
-        elif reaction.message.id in self.pending_category_deletion:
-            deletion_data = self.pending_category_deletion[reaction.message.id]
-
-            if user.id != deletion_data["author_id"]:
-                return
-
-            if str(reaction.emoji) == '✅':
-                category_name = deletion_data["category"]
-                categories = load_categories()
-                links = load_links()
-
-                links = [link for link in links if link["category"] != category_name]
-                save_links(links)
-
-                if category_name in categories:
-                    del categories[category_name]
-                    save_categories(categories)
-
-                await reaction.message.channel.send(f"Category '{category_name}' deleted.")
-
-            elif str(reaction.emoji) == '❌':
-                await reaction.message.channel.send("Deletion cancelled.")
-
-            del self.pending_category_deletion[reaction.message.id]
-
-        elif reaction.message.id in self.pending_clear_all:
-            clear_data = self.pending_clear_all[reaction.message.id]
-
-            if user.id != clear_data["author_id"]:
-                return
-
-            if str(reaction.emoji) == '✅':
-                links_count = len(load_links())
-                categories_count = len(load_categories())
-                save_links([])
-                save_categories({})
-                await reaction.message.channel.send(
-                    f"All cleared, {user.mention}! "
-                    f"Deleted {links_count} links and {categories_count} categories."
-                )
-
-            elif str(reaction.emoji) == '❌':
-                await reaction.message.channel.send("Clear cancelled.")
-
-            del self.pending_clear_all[reaction.message.id]
-
-    @commands.command(name='category', help='Assign a category to a saved link')
-    async def assign_category(self, ctx, *, category_name):
+    @commands.hybrid_command(name='category', description='Assign a category to a saved link')
+    async def assign_category(self, ctx: commands.Context, *, category_name: str):
         if ctx.author.id in self.links_to_categorize:
             link_data = self.links_to_categorize[ctx.author.id]
             link = link_data["link"]
@@ -1240,16 +1087,16 @@ class LinkManager(commands.Cog):
         else:
             await ctx.send(f"No pending link to categorize, {ctx.author.mention}")
 
-    @commands.command(name='cancel', help='Cancel saving a pending link')
-    async def cancel_save(self, ctx):
+    @commands.hybrid_command(name='cancel', description='Cancel saving a pending link')
+    async def cancel_save(self, ctx: commands.Context):
         if ctx.author.id in self.links_to_categorize:
             del self.links_to_categorize[ctx.author.id]
             await ctx.send(f"Link save cancelled, {ctx.author.mention}")
         else:
             await ctx.send(f"No pending link, {ctx.author.mention}")
 
-    @commands.command(name='getlinks', help='Retrieve all saved links or filter by category')
-    async def get_links(self, ctx, category=None):
+    @commands.hybrid_command(name='getlinks', description='Retrieve all saved links or filter by category')
+    async def get_links(self, ctx: commands.Context, category: str = None):
         links = load_links()
 
         if not links:
@@ -1257,7 +1104,7 @@ class LinkManager(commands.Cog):
             return
 
         if category:
-            filtered_links = [link for link in links if link["category"].lower() == category.lower()]
+            filtered_links = [link for link in links if link.get("category", "").lower() == category.lower()]
             if not filtered_links:
                 await ctx.send(f"No links found in category '{category}'!")
                 return
@@ -1268,7 +1115,7 @@ class LinkManager(commands.Cog):
 
         response = f"**{title}**\n\n"
         for i, link in enumerate(links, 1):
-            response += f"{i}. **{link['category']}** - {link['url']}\n   *(by {link['author']}, {link['timestamp']})*\n"
+            response += f"{i}. **{link.get('category','Uncategorized')}** - {link['url']}\n   *(by {link.get('author','Unknown')}, {link.get('timestamp','')})*\n"
 
             if len(response) > 1500:
                 await ctx.send(response)
@@ -1277,8 +1124,8 @@ class LinkManager(commands.Cog):
         if response:
             await ctx.send(response)
 
-    @commands.command(name='categories', help='List all categories')
-    async def list_categories(self, ctx):
+    @commands.hybrid_command(name='categories', description='List all categories')
+    async def list_categories(self, ctx: commands.Context):
         categories = load_categories()
 
         if not categories:
@@ -1291,8 +1138,8 @@ class LinkManager(commands.Cog):
 
         await ctx.send(response)
 
-    @commands.command(name='deletelink', help='Delete a link by its number')
-    async def delete_link(self, ctx, link_number: int):
+    @commands.hybrid_command(name='deletelink', description='Delete a link by its number')
+    async def delete_link(self, ctx: commands.Context, link_number: int):
         links = load_links()
 
         if not links:
@@ -1308,7 +1155,7 @@ class LinkManager(commands.Cog):
         save_links(links)
 
         categories = load_categories()
-        if link_to_delete["category"] in categories:
+        if link_to_delete.get("category") in categories:
             if link_to_delete["url"] in categories[link_to_delete["category"]]:
                 categories[link_to_delete["category"]].remove(link_to_delete["url"])
                 if not categories[link_to_delete["category"]]:
@@ -1317,8 +1164,8 @@ class LinkManager(commands.Cog):
 
         await ctx.send(f"✅ Link {link_number} deleted!")
 
-    @commands.command(name='deletecategory', help='Delete a category and all its links')
-    async def delete_category(self, ctx, *, category_name):
+    @commands.hybrid_command(name='deletecategory', description='Delete a category and all its links')
+    async def delete_category(self, ctx: commands.Context, *, category_name: str):
         categories = load_categories()
 
         if category_name not in categories:
@@ -1337,9 +1184,9 @@ class LinkManager(commands.Cog):
             "author_id": ctx.author.id
         }
 
-    @commands.command(name='clearlinks', help='Clear all links (Admin only)')
+    @commands.hybrid_command(name='clearlinks', description='Clear all links (Admin only)')
     @commands.has_permissions(administrator=True)
-    async def clear_links(self, ctx):
+    async def clear_links(self, ctx: commands.Context):
         confirm_msg = await ctx.send(
             "⚠️ Delete ALL links and categories? This cannot be undone.\n"
             "React with ✅ to confirm or ❌ to cancel."
@@ -1351,12 +1198,12 @@ class LinkManager(commands.Cog):
             "author_id": ctx.author.id
         }
 
-    @commands.command(name='searchlinks', help='Search for links')
-    async def search_links(self, ctx, *, search_term):
+    @commands.hybrid_command(name='searchlinks', description='Search for links')
+    async def search_links(self, ctx: commands.Context, *, search_term: str):
         links = load_links()
 
         results = [link for link in links if search_term.lower() in link["url"].lower() or
-                   search_term.lower() in link["category"].lower()]
+                   search_term.lower() in link.get("category", "").lower()]
 
         if not results:
             await ctx.send(f"No results for '{search_term}'")
@@ -1364,7 +1211,7 @@ class LinkManager(commands.Cog):
 
         response = f"**🔍 Search results for '{search_term}':**\n\n"
         for i, link in enumerate(results, 1):
-            response += f"{i}. **{link['category']}** - {link['url']}\n"
+            response += f"{i}. **{link.get('category','Uncategorized')}** - {link['url']}\n"
 
             if len(response) > 1500:
                 await ctx.send(response)
@@ -1373,8 +1220,8 @@ class LinkManager(commands.Cog):
         if response:
             await ctx.send(response)
 
-    @commands.command(name='analyze', help='Get AI guidance on a specific link')
-    async def analyze_link(self, ctx, url):
+    @commands.hybrid_command(name='analyze', description='Get AI guidance on a specific link')
+    async def analyze_link(self, ctx: commands.Context, url: str):
         if self.rate_limiter.is_limited(ctx.author.id, 'analyze', cooldown=10.0):
             remaining = self.rate_limiter.get_remaining(ctx.author.id, 'analyze', cooldown=10.0)
             await ctx.send(f"{ctx.author.mention}, please wait {remaining:.1f}s.", delete_after=5)
@@ -1394,8 +1241,8 @@ class LinkManager(commands.Cog):
             embed.set_footer(text=f"URL: {url}")
             await ctx.send(embed=embed)
 
-    @commands.command(name='stats', help='Show link statistics')
-    async def show_stats(self, ctx):
+    @commands.hybrid_command(name='stats', description='Show link statistics')
+    async def show_stats(self, ctx: commands.Context):
         links = load_links()
         if not links:
             await ctx.send("No data for statistics!")
@@ -1442,8 +1289,8 @@ class LinkManager(commands.Cog):
 
         await ctx.send(embed=embed)
 
-    @commands.command(name='recent', help='Show 5 most recent links')
-    async def show_recent(self, ctx):
+    @commands.hybrid_command(name='recent', description='Show 5 most recent links')
+    async def show_recent(self, ctx: commands.Context):
         links = load_links()
         if not links:
             await ctx.send("No links saved yet!")
@@ -1454,7 +1301,7 @@ class LinkManager(commands.Cog):
 
         response = "**🕒 Recently Saved:**\n\n"
         for i, link in enumerate(recent_links, 1):
-            response += f"{i}. **[{link['category']}]** {link['url']}\n   *by {link['author']} at {link['timestamp']}*\n"
+            response += f"{i}. **[{link.get('category','Uncategorized')}]** {link['url']}\n   *by {link.get('author','Unknown')} at {link.get('timestamp','')}*\n"
 
         await ctx.send(response)
 
@@ -1478,6 +1325,7 @@ async def main():
         raise ValueError("DISCORD_TOKEN not set!")
     logger.info(f"Starting bot. PID={os.getpid()}")
     async with bot:
+        # add cog before start so hybrid commands are present when setup_hook syncs
         if bot.get_cog("LinkManager") is None:
             await bot.add_cog(LinkManager(bot))
             logger.info(f"LinkManager cog added")
