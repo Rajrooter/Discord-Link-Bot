@@ -290,53 +290,7 @@ class LinkActionView(discord.ui.View):
             )
             return False
         return True
-    
-    @discord.ui.button(label="Save", style=discord.ButtonStyle.green, emoji="📩")
-    async def save_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Handle Save button click"""
-        # Remove from DB
-        await asyncio.to_thread(storage.delete_pending_link_by_id, self.pending_db_id)
-        
-        # Remove from in-memory pending_links
-        if interaction.message.id in self.cog.pending_links:
-            del self.cog.pending_links[interaction.message.id]
-        
-        # Add to links_to_categorize
-        self.cog.links_to_categorize[self.author_id] = {
-            "link": self.link,
-            "message": self.original_message
-        }
-        
-        # Send ephemeral instruction
-        await interaction.response.send_message(
-            f"✅ Link marked for saving! Use `!category <name>` to finalize.",
-            ephemeral=True
-        )
-        
-        # Disable buttons
-        for item in self.children:
-            item.disabled = True
-        await interaction.message.edit(view=self)
-    
-    @discord.ui.button(label="Ignore", style=discord.ButtonStyle.red, emoji="🙅🏻‍♂️")
-    async def ignore_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Handle Ignore button click - show confirmation"""
-        # Create confirmation view
-        confirm_view = ConfirmDeleteView(
-            self.link,
-            self.author_id,
-            self.original_message,
-            self.pending_db_id,
-            interaction.message.id,
-            self.cog
-        )
-        
-        await interaction.response.send_message(
-            "⚠️ Are you sure you want to delete this link?",
-            view=confirm_view,
-            ephemeral=True
-        )
-class DisclaimerView(discord.ui.View):
+        class DisclaimerView(discord.ui.View):
     """View for asking if user wants to save any links from their message"""
 
     def __init__(self, links: list, author_id: int, original_message, cog):
@@ -403,6 +357,53 @@ class DisclaimerView(discord.ui.View):
             await self.message.delete()
         except Exception as e:
             logger.debug(f"Error deleting disclaimer message: {e}")
+    
+    @discord.ui.button(label="Save", style=discord.ButtonStyle.green, emoji="📩")
+    async def save_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Handle Save button click"""
+        # Remove from DB
+        await asyncio.to_thread(storage.delete_pending_link_by_id, self.pending_db_id)
+        
+        # Remove from in-memory pending_links
+        if interaction.message.id in self.cog.pending_links:
+            del self.cog.pending_links[interaction.message.id]
+        
+        # Add to links_to_categorize
+        self.cog.links_to_categorize[self.author_id] = {
+            "link": self.link,
+            "message": self.original_message
+        }
+        
+        # Send ephemeral instruction
+        await interaction.response.send_message(
+            f"✅ Link marked for saving! Use `!category <name>` to finalize.",
+            ephemeral=True
+        )
+        
+        # Disable buttons
+        for item in self.children:
+            item.disabled = True
+        await interaction.message.edit(view=self)
+    
+    @discord.ui.button(label="Ignore", style=discord.ButtonStyle.red, emoji="🙅🏻‍♂️")
+    async def ignore_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Handle Ignore button click - show confirmation"""
+        # Create confirmation view
+        confirm_view = ConfirmDeleteView(
+            self.link,
+            self.author_id,
+            self.original_message,
+            self.pending_db_id,
+            interaction.message.id,
+            self.cog
+        )
+        
+        await interaction.response.send_message(
+            "⚠️ Are you sure you want to delete this link?",
+            view=confirm_view,
+            ephemeral=True
+        )
+
 
 class MultiLinkSelectView(discord.ui.View):
     "View for selecting multiple links with a dropdown""
