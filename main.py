@@ -509,7 +509,7 @@ class ConfirmMultiLinkView(discord.ui.View):
     async def on_timeout(self):
         try:
             if self.message:
-                for item in self.children:
+                for item in self.children():
                     item.disabled = True
                 await self.message.edit(view=self)
         except Exception as e:
@@ -732,6 +732,30 @@ class LinkManager(commands.Cog):
             self.cleanup_task = asyncio.create_task(self.cleanup_old_channel_events())
             logger.info("Started event cleanup task")
 
+    async def _get_preferred_prefix(self, message: discord.Message) -> str:
+        """Resolve the bot's active prefix for a given message (works with callable prefixes)."""
+        try:
+            cp = self.bot.command_prefix
+            # command_prefix can be callable (sync/async) or string/list
+            if callable(cp):
+                maybe = cp(self.bot, message)
+                if asyncio.iscoroutine(maybe):
+                    prefix = await maybe
+                else:
+                    prefix = maybe
+            else:
+                prefix = cp
+        except Exception:
+            prefix = '!'
+
+        # prefix might be list/tuple; pick a human prefix (not mention form)
+        if isinstance(prefix, (list, tuple)):
+            for p in prefix:
+                if p and not p.startswith('<@'):
+                    return p
+            return prefix[0] if prefix else '!'
+        return prefix if prefix else '!'
+
     async def _delete_if_no_response(self, bot_message, original_message, pending_db_id, delay=AUTO_DELETE_SECONDS):
         """Delete only the bot prompt if user didn't respond within delay."""
         if not AUTO_DELETE_ENABLED:
@@ -775,12 +799,38 @@ class LinkManager(commands.Cog):
             pass
 
     @commands.Cog.listener()
-    async def on_message(self, message):
+    async def on_message(self, message: discord.Message):
         if message.author == self.bot.user or message.id in self.processed_messages:
             return
 
         self.processed_messages.add(message.id)
+
+        # Let other commands (hybrid/prefix) be processed first
         await self.bot.process_commands(message)
+
+        # Respond when the bot is directly mentioned (mention-only or mention at start)
+        try:
+            if self.bot.user in message.mentions:
+                content = message.content.strip()
+                mention_forms = (f"<@{self.bot.user.id}>", f"<@!{self.bot.user.id}>")
+                # respond if message is exactly the mention or starts with the mention
+                if content == mention_forms[0] or content == mention_forms[1] or content.startswith(mention_forms[0]) or content.startswith(mention_forms[1]):
+                    prefix = await self._get_preferred_prefix(message)
+                    embed = discord.Embed(
+                        title="👋 Welcome to Digital Labour!",
+                        description=(
+                            "Hi there! I'm Digital Labour 🤖\n\n"
+                            "I was made by **Raj Aryan** ❤️\n"
+                            "My main job is to help you save, organize and review useful links for study and collaboration.\n\n"
+                            f"My command prefix is `{prefix}` — try `{prefix}help` to see what I can do!"
+                        ),
+                        color=discord.Color.blurple()
+                    )
+                    embed.set_footer(text="Digital Labour — saving knowledge, one link at a time")
+                    await message.channel.send(embed=embed)
+                    return
+        except Exception as e:
+            logger.debug(f"Mention handler error: {e}")
 
         if len(self.processed_messages) > 1000:
             self.processed_messages = set(list(self.processed_messages)[-1000:])
