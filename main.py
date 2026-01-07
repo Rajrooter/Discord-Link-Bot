@@ -147,7 +147,7 @@ class AdorableHelp(commands.HelpCommand):
                 inline=False
             )
             
-        embed.set_footer(text="Digital Labour • Powered by Google Gemini (Free)")
+        embed.set_footer(text="Digital Labour ❤️ Made by RAJ ARYAN")
 
         channel = self.get_destination()
         await channel.send(embed=embed)
