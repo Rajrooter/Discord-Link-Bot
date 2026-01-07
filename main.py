@@ -291,7 +291,7 @@ class LinkActionView(discord.ui.View):
             return False
         return True
     
-    @discord.ui.button(label="Save", style=discord.ButtonStyle.green, emoji="✅")
+    @discord.ui.button(label="Save", style=discord.ButtonStyle.green, emoji="📩")
     async def save_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Handle Save button click"""
         # Remove from DB
@@ -318,7 +318,7 @@ class LinkActionView(discord.ui.View):
             item.disabled = True
         await interaction.message.edit(view=self)
     
-    @discord.ui.button(label="Ignore", style=discord.ButtonStyle.red, emoji="❌")
+    @discord.ui.button(label="Ignore", style=discord.ButtonStyle.red, emoji="🙅🏻‍♂️")
     async def ignore_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Handle Ignore button click - show confirmation"""
         # Create confirmation view
@@ -336,7 +336,73 @@ class LinkActionView(discord.ui.View):
             view=confirm_view,
             ephemeral=True
         )
+class DisclaimerView(discord.ui.View):
+    """View for asking if user wants to save any links from their message"""
 
+    def __init__(self, links: list, author_id: int, original_message, cog):
+        super().__init__(timeout=60)
+        self.links = links
+        self.author_id = author_id
+        self.original_message = original_message
+        self.cog = cog
+        self.message = None
+
+    async def on_timeout(self):
+        try:
+            if self.message:
+                for item in self.children:
+                    item.disabled = True
+                await self.message.edit(view=self)
+        except Exception as e:
+            logger.debug(f"Disclaimer view timeout error: {e}")
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message(
+                "This button is not for you!", 
+                ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Yes, I want to save links", style=discord.ButtonStyle.green, emoji="✅")
+    async def yes_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """User wants to proceed with link saving"""
+        await interaction.response.defer()
+        
+        # Delete the disclaimer message
+        try:
+            await self.message.delete()
+        except Exception as e:
+            logger.debug(f"Error deleting disclaimer message: {e}")
+        
+        # Now show the multiple link selection dropdown
+        links_data = [{"url": link} for link in self.links]
+        
+        embed = discord.Embed(
+            title="📎 Multiple Links Detected",
+            description=f"Found **{len(self.links)}** links in your message.\n\n"
+                       f"Select which ones you'd like to review from the dropdown below:",
+            color=discord.Color.blue()
+        )
+        
+        selection_view = MultiLinkSelectView(links_data, self.author_id, self.original_message, self.cog)
+        prompt_msg = await interaction.channel.send(embed=embed, view=selection_view)
+        selection_view.message = prompt_msg
+
+    @discord.ui.button(label="No, ignore these links", style=discord.ButtonStyle.red, emoji="❌")
+    async def no_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """User doesn't want to save any links"""
+        await interaction.response.send_message(
+            "👍 Got it! Links will be ignored.",
+            ephemeral=True
+        )
+        
+        # Delete the disclaimer message (but keep the original message)
+        try:
+            await self.message.delete()
+        except Exception as e:
+            logger.debug(f"Error deleting disclaimer message: {e}")
 
 class MultiLinkSelectView(discord.ui.View):
     "View for selecting multiple links with a dropdown""
@@ -412,7 +478,7 @@ class MultiLinkSelectView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.author_id:
-            await interaction.response.send_message("This is not for you!", ephemeral=True)
+            await interaction.response.send_message("You are not the author,fool😎", ephemeral=True)
             return False
 
         if interaction.data.get("custom_id") == "link_selector":
