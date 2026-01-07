@@ -338,6 +338,119 @@ class LinkActionView(discord.ui.View):
         )
 
 
+class MultiLinkSelectionView(discord.ui.View):
+    """View for selecting which links to save from multiple links"""
+
+    def __init__(self, links: list, author_id: int, original_message, cog):
+        super().__init__(timeout=300)
+        self.links = links
+        self.author_id = author_id
+        self.original_message = original_message
+        self.cog = cog
+        self.selected_links = set()
+        self.message = None
+
+        for idx, link_info in enumerate(links):
+            self.add_item(LinkToggleButton(idx, link_info["url"], self))
+
+    async def on_timeout(self):
+        try:
+            if self.message:
+                for item in self.children:
+                    item.disabled = True
+                await self.message.edit(view=self)
+        except Exception as e:
+            logger.debug(f"Multi-link view timeout cleanup error: {e}")
+
+
+class LinkToggleButton(discord.ui.Button):
+    """Button for toggling link selection"""
+
+    def __init__(self, idx: int, url: str, view: "MultiLinkSelectionView"):
+        self.idx = idx
+        self.url = url
+        self.parent_view = view
+        label = f"Link {idx + 1}"
+        super().__init__(label=label, style=discord.ButtonStyle.secondary, emoji="📎")
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.parent_view.author_id:
+            await interaction.response.send_message("This is not for you!", ephemeral=True)
+            return
+
+        if self.idx in self.parent_view.selected_links:
+            self.parent_view.selected_links.discard(self.idx)
+            self.style = discord.ButtonStyle.secondary
+        else:
+            self.parent_view.selected_links.add(self.idx)
+            self.style = discord.ButtonStyle.success
+
+        await interaction.response.defer()
+        await self.parent_view.message.edit(view=self.parent_view)
+
+
+class ConfirmMultiLinkView(discord.ui.View):
+    """Confirmation view for saving selected links"""
+
+    def __init__(self, links: list, selected_indices: set, author_id: int, original_message, cog):
+        super().__init__(timeout=60)
+        self.links = links
+        self.selected_indices = selected_indices
+        self.author_id = author_id
+        self.original_message = original_message
+        self.cog = cog
+        self.message = None
+
+    async def on_timeout(self):
+        try:
+            if self.message:
+                for item in self.children:
+                    item.disabled = True
+                await self.message.edit(view=self)
+        except Exception as e:
+            logger.debug(f"Confirm multi-link view timeout error: {e}")
+
+    @discord.ui.button(label="Save Selected", style=discord.ButtonStyle.green, emoji="✅")
+    async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+
+        for idx in self.selected_indices:
+            link_info = self.links[idx]
+            link = link_info["url"]
+
+            pending_entry = {
+                "user_id": interaction.user.id,
+                "link": link,
+                "channel_id": interaction.channel.id,
+                "original_message_id": self.original_message.id if self.original_message else 0,
+                "timestamp": datetime.datetime.utcnow().isoformat()
+            }
+            pending_id = await asyncio.to_thread(storage.add_pending_link, pending_entry)
+
+            self.cog.links_to_categorize[interaction.user.id] = {
+                "link": link,
+                "message": self.original_message,
+                "pending_db_id": pending_id
+            }
+
+            await interaction.channel.send(
+                f"{interaction.user.mention}, link saved to queue!\n"
+                f"Use `!category <name>` to save or `!cancel` to skip.\n"
+                f"`{link}`"
+            )
+
+        for item in self.children:
+            item.disabled = True
+        await self.message.edit(view=self)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.red, emoji="❌")
+    async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        for item in self.children:
+            item.disabled = True
+        await self.message.edit(view=self)
+
+
 class ConfirmDeleteView(discord.ui.View):
     """Confirmation view for deleting a link"""
 
@@ -516,48 +629,33 @@ class LinkManager(commands.Cog):
             logger.info("Started event cleanup task")
 
     async def _delete_if_no_response(self, bot_message, original_message, pending_db_id, delay=AUTO_DELETE_SECONDS):
-        """Delete the original user's message (and bot prompt) if user didn't react within delay."""
+        """Delete only the bot prompt if user didn't respond within delay."""
         if not AUTO_DELETE_ENABLED:
             return
         await asyncio.sleep(delay)
         try:
-            # If bot_message is still pending (no reaction processed), then delete original message
             if bot_message and bot_message.id in self.pending_links:
-                # Delete original user message (the uploaded link)
-                try:
-                    if original_message:
-                        await original_message.delete()
-                except discord.NotFound:
-                    pass
-                except discord.Forbidden:
-                    print("Bot lacks permissions to delete user messages.")
-                except Exception as e:
-                    print(f"Error deleting original message: {e}")
-
-                # Optionally delete the bot prompt to reduce clutter as well
                 try:
                     await bot_message.delete()
                 except discord.NotFound:
                     pass
                 except discord.Forbidden:
-                    print("Bot lacks permissions to delete its own message.")
+                    logger.warning("Bot lacks permissions to delete its own message.")
                 except Exception as e:
-                    print(f"Error deleting bot message: {e}")
+                    logger.warning(f"Error deleting bot message: {e}")
 
-                # Remove the pending_links entry and DB entry
                 try:
                     if bot_message.id in self.pending_links:
                         del self.pending_links[bot_message.id]
                 except Exception:
                     pass
-                
-                # Remove from DB
+
                 try:
                     await asyncio.to_thread(storage.delete_pending_link_by_id, pending_db_id)
                 except Exception as e:
-                    print(f"Error deleting pending link from DB: {e}")
+                    logger.warning(f"Error deleting pending link from DB: {e}")
         except Exception as e:
-            print(f"Auto-delete check error: {e}")
+            logger.warning(f"Auto-delete check error: {e}")
 
     async def _auto_remove_confirmation(self, confirm_msg, delay=CONFIRM_TIMEOUT):
         """Auto remove the temporary confirmation message and its pending entry."""
@@ -649,6 +747,39 @@ class LinkManager(commands.Cog):
 
         if urls:
             non_media_links = [link for link in urls if not is_media_url(link) and is_valid_url(link)]
+
+            if len(non_media_links) > 1:
+                links_data = [{"url": link, "ai_guidance": None} for link in non_media_links]
+
+                embed = discord.Embed(
+                    title="📎 Multiple Links Detected",
+                    description=f"Found {len(non_media_links)} links in your message. Select which ones you'd like to review:",
+                    color=discord.Color.blue()
+                )
+
+                for idx, link_info in enumerate(links_data, 1):
+                    embed.add_field(
+                        name=f"Link {idx}",
+                        value=f"`{link_info['url'][:80]}{'...' if len(link_info['url']) > 80 else ''}`",
+                        inline=False
+                    )
+
+                embed.set_footer(text="Click the buttons below to select links, then confirm")
+
+                selection_view = MultiLinkSelectionView(links_data, message.author.id, message, self)
+
+                prompt_msg = await message.channel.send(embed=embed, view=selection_view)
+                selection_view.message = prompt_msg
+
+                async def wait_for_selection():
+                    await asyncio.sleep(300)
+                    if selection_view.selected_links and prompt_msg.id in [getattr(v, "message", {}).id for v in [selection_view] if hasattr(v, "message")]:
+                        confirm_view = ConfirmMultiLinkView(links_data, selection_view.selected_links, message.author.id, message, self)
+                        confirm_msg = await message.channel.send("**Confirm to save selected links?**", view=confirm_view)
+                        confirm_view.message = confirm_msg
+
+                asyncio.create_task(wait_for_selection())
+                return
 
             for link in non_media_links:
                 ch_id = message.channel.id
