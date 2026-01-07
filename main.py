@@ -137,7 +137,7 @@ class AdorableHelp(commands.HelpCommand):
         if AI_ENABLED:
             embed.add_field(
                 name="🤖 AI Status",
-                value="✅ **Google Gemini AI Enabled** - Free link analysis powered by Gemini 2.0",
+                value="✅ **Google Gemini AI Enabled** ",
                 inline=False
             )
         else:
