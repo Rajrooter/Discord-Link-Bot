@@ -1,4 +1,3 @@
-
 import datetime
 import json
 import os
@@ -10,22 +9,12 @@ import asyncio
 import aiohttp
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 
 import storage
 from utils import logger, is_valid_url, RateLimiter, EventCleanup
-GUILD_ID = 1383839179846193233
-
-class MyBot(commands.Bot):
-    async def setup_hook(self):
-        try:
-            guild = discord.Object(id=GUILD_ID)
-            self.tree.copy_global_to(guild=guild)
-            synced = await self.tree.sync(guild=guild)
-            logger.info(f"✅ Synced {len(synced)} commands to guild {GUILD_ID}")
-        except Exception as e:
-            logger.error(f"Failed to sync commands in setup_hook: {e}")
 
 load_dotenv()
 
@@ -47,9 +36,9 @@ try:
     AUTO_DELETE_SECONDS = int(os.environ.get("AUTO_DELETE_AFTER", "5"))
 except ValueError:
     AUTO_DELETE_SECONDS = 5
-BATCH_WINDOW_SECONDS = 3   
-BATCH_THRESHOLD = 5       
-CONFIRM_TIMEOUT = 4  
+BATCH_WINDOW_SECONDS = 3
+BATCH_THRESHOLD = 5
+CONFIRM_TIMEOUT = 4
 
 async def get_ai_guidance(url: str, max_retries: int = 3) -> str:
     """Get AI guidance on whether a link is vital for study purposes."""
@@ -133,7 +122,7 @@ class AdorableHelp(commands.HelpCommand):
             value="Type `!help [command]` to see more details! ✨",
             inline=False
         )
-        
+
         if AI_ENABLED:
             embed.add_field(
                 name="🤖 AI Status",
@@ -146,7 +135,7 @@ class AdorableHelp(commands.HelpCommand):
                 value="⚠️ **AI Disabled** - Get free AI by adding GEMINI_API_KEY",
                 inline=False
             )
-            
+
         embed.set_footer(text="Digital Labour ❤️ Made by RAJ ARYAN")
 
         channel = self.get_destination()
@@ -156,7 +145,7 @@ class AdorableHelp(commands.HelpCommand):
         embed = discord.Embed(
             title=f"✨ Command: !{command.name}",
             description=command.help or "No description provided.",
-            color=discord.Color.from_rgb(173, 216, 230)  
+            color=discord.Color.from_rgb(173, 216, 230)
         )
         alias = ", ".join(command.aliases)
         if alias:
@@ -166,18 +155,41 @@ class AdorableHelp(commands.HelpCommand):
 
         channel = self.get_destination()
         await channel.send(embed=embed)
+
 intents = discord.Intents.default()
 intents.message_content = True
 intents.reactions = True
 intents.members = True
 
-# create bot instance
-bot = MyBot(command_prefix=get_prefix, intents=intents, help_command=AdorableHelp())
-
 def get_prefix(bot, message):
     prefixes = ['!']
     return commands.when_mentioned_or(*prefixes)(bot, message)
-bot = commands.Bot(command_prefix=get_prefix, intents=intents, help_command=AdorableHelp())
+
+# Subclass commands.Bot so setup_hook is executed by discord.py
+class MyBot(commands.Bot):
+    async def setup_hook(self):
+        """Sync application commands to a test guild for instant visibility."""
+        try:
+            GUILD_ID = 1383839179846193233
+            guild = discord.Object(id=GUILD_ID)
+            # copy global commands to the guild for instant updates
+            self.tree.copy_global_to(guild=guild)
+            synced = await self.tree.sync(guild=guild)
+            logger.info(f"✅ Synced {len(synced)} commands to guild {GUILD_ID}")
+        except Exception as e:
+            logger.error(f"Failed to sync commands in setup_hook: {e}")
+
+# create bot instance from subclass
+bot = MyBot(command_prefix=get_prefix, intents=intents, help_command=AdorableHelp())
+
+# Example application command (slash command) so you can verify sync works:
+@app_commands.command(name="ping", description="Ping the bot (app command)")
+async def ping(interaction: discord.Interaction):
+    await interaction.response.send_message("Pong!")
+
+# register the example command on the tree (so sync has something to upload)
+bot.tree.add_command(ping)
+
 LINKS_FILE = "saved_links.json"
 CATEGORIES_FILE = "categories.json"
 ONBOARDING_FILE = "onboarding_data.json"
@@ -214,7 +226,7 @@ def load_links():
     return storage.get_saved_links()
 
 def save_links(links):
-    
+
     storage.clear_saved_links()
     for link in links:
         storage.add_saved_link(link)
@@ -276,7 +288,7 @@ class DisclaimerView(discord.ui.View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.author_id:
             await interaction.response.send_message(
-                "This button is not for you!", 
+                "This button is not for you!",
                 ephemeral=True
             )
             return False
@@ -286,21 +298,21 @@ class DisclaimerView(discord.ui.View):
     async def yes_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """User wants to proceed with link saving"""
         await interaction.response.defer()
-    
+
         try:
             await self.message.delete()
         except Exception as e:
             logger.debug(f"Error deleting disclaimer message: {e}")
-      
+
         links_data = [{"url": link} for link in self.links]
-        
+
         embed = discord.Embed(
             title="📎 Multiple Links Detected",
             description=f"Found **{len(self.links)}** links in your message.\n\n"
                        f"Select which ones you'd like to review from the dropdown below:",
             color=discord.Color.blue()
         )
-        
+
         selection_view = MultiLinkSelectView(links_data, self.author_id, self.original_message, self.cog)
         prompt_msg = await interaction.channel.send(embed=embed, view=selection_view)
         selection_view.message = prompt_msg
@@ -312,7 +324,7 @@ class DisclaimerView(discord.ui.View):
             "👍 Got it! Links will be ignored.",
             ephemeral=True
         )
-        
+
         try:
             await self.message.delete()
         except Exception as e:
@@ -339,40 +351,40 @@ class LinkActionView(discord.ui.View):
                 await self.message.edit(view=self)
         except Exception as e:
             logger.debug(f"View timeout cleanup error: {e}")
-    
+
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         """Only allow the original author to interact"""
         if interaction.user.id != self.author_id:
             await interaction.response.send_message(
-                "This button is not for you!", 
+                "This button is not for you!",
                 ephemeral=True
             )
             return False
         return True
-    
+
     @discord.ui.button(label="Save", style=discord.ButtonStyle.green, emoji="✅")
     async def save_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Handle Save button click"""
         await asyncio.to_thread(storage.delete_pending_link_by_id, self.pending_db_id)
-        
+
         if interaction.message.id in self.cog.pending_links:
             del self.cog.pending_links[interaction.message.id]
-        
+
         self.cog.links_to_categorize[self.author_id] = {
             "link": self.link,
             "message": self.original_message
         }
-        
+
         await interaction.response.send_message(
             f"✅ Link marked for saving! Use `!category <name>` to finalize.",
             ephemeral=True
         )
-        
+
         # Disable buttons
         for item in self.children:
             item.disabled = True
         await interaction.message.edit(view=self)
-    
+
     @discord.ui.button(label="Ignore", style=discord.ButtonStyle.red, emoji="❌")
     async def ignore_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Handle Ignore button click - show confirmation"""
@@ -384,7 +396,7 @@ class LinkActionView(discord.ui.View):
             interaction.message.id,
             self.cog
         )
-        
+
         await interaction.response.send_message(
             "⚠️ Are you sure you want to delete this link?",
             view=confirm_view,
@@ -404,22 +416,22 @@ class MultiLinkSelectView(discord.ui.View):
         self.selected_links = []
         self.message = None
         max_options = min(len(links), 25)
-        
+
         options = []
-        for idx in range(max_options):  
+        for idx in range(max_options):
             try:
                 link_info = links[idx]
                 url = link_info.get("url", "")
-                
+
                 if not url:
                     logger.warning(f"Link info missing URL: {link_info}")
                     continue
-                
+
                 label = f"Link {idx + 1}"
                 description = url
                 if len(description) > 100:
                     description = description[:97] + "..."
-                
+
                 options.append(discord.SelectOption(
                     label=label,
                     value=str(idx),
@@ -428,7 +440,7 @@ class MultiLinkSelectView(discord.ui.View):
             except Exception as e:
                 logger.error(f"Error creating option for link {idx}: {e}")
                 continue
-        
+
         if not options:
             logger.error("No valid options created for MultiLinkSelectView")
             options.append(discord.SelectOption(
@@ -436,7 +448,7 @@ class MultiLinkSelectView(discord.ui.View):
                 value="0",
                 description="Error processing links"
             ))
-        
+
         if len(links) > 25:
             logger.info(f"Truncated {len(links)} links to 25 for dropdown menu")
 
@@ -470,10 +482,10 @@ class MultiLinkSelectView(discord.ui.View):
 
             if self.selected_links:
                 confirm_view = ConfirmMultiLinkView(
-                    self.links, 
-                    set(self.selected_links), 
-                    self.author_id, 
-                    self.original_message, 
+                    self.links,
+                    set(self.selected_links),
+                    self.author_id,
+                    self.original_message,
                     self.cog
                 )
                 confirm_msg = await interaction.channel.send(
@@ -579,7 +591,7 @@ class ConfirmDeleteView(discord.ui.View):
                 await self.message.edit(view=self)
         except Exception as e:
             logger.debug(f"Confirm view timeout cleanup error: {e}")
-    
+
     @discord.ui.button(label="Confirm Delete", style=discord.ButtonStyle.danger, emoji="✅")
     async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Confirm deletion"""
@@ -593,17 +605,17 @@ class ConfirmDeleteView(discord.ui.View):
             await bot_msg.delete()
         except Exception as e:
             print(f"Error deleting bot message: {e}")
-        
+
         await asyncio.to_thread(storage.delete_pending_link_by_id, self.pending_db_id)
-        
+
         if self.bot_msg_id in self.cog.pending_links:
             del self.cog.pending_links[self.bot_msg_id]
-        
+
         await interaction.response.send_message(
             "🗑️ Link deleted successfully.",
             ephemeral=True
         )
-    
+
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Cancel deletion"""
@@ -657,7 +669,7 @@ class LinkManager(commands.Cog):
                     await guild.create_role(name=role_name)
                     print(f"Created role: {role_name}")
                 except discord.Forbidden:
-                    print(f"Missing permissions to create role: {role_name}") 
+                    print(f"Missing permissions to create role: {role_name}")
                 except Exception as e:
                     print(f"Error creating role {role_name}: {e}")
 
@@ -865,7 +877,7 @@ class LinkManager(commands.Cog):
                             "timestamp": datetime.datetime.utcnow().isoformat()
                         }
                         pending_id = await asyncio.to_thread(storage.add_pending_link, pending_entry)
-                        
+
                         self.pending_batches.setdefault(message.author.id, []).append({
                             "link": link,
                             "original_message": message,
@@ -881,11 +893,11 @@ class LinkManager(commands.Cog):
                     color=discord.Color.gold()
                 )
                 disclaimer_embed.set_footer(text="Choose an option below")
-                
+
                 disclaimer_view = DisclaimerView(dropdown_links, message.author.id, message, self)
                 disclaimer_msg = await message.channel.send(embed=disclaimer_embed, view=disclaimer_view)
                 disclaimer_view.message = disclaimer_msg
-                
+
                 logger.info(f"Multiple links detected: {len(non_media_links)} links from {message.author}")
                 return
 
@@ -906,7 +918,7 @@ class LinkManager(commands.Cog):
                         "timestamp": datetime.datetime.utcnow().isoformat()
                     }
                     pending_id = await asyncio.to_thread(storage.add_pending_link, pending_entry)
-                    
+
                     self.pending_batches.setdefault(message.author.id, []).append({
                         "link": link,
                         "original_message": message,
@@ -926,23 +938,23 @@ class LinkManager(commands.Cog):
                     "timestamp": datetime.datetime.utcnow().isoformat()
                 }
                 pending_id = await asyncio.to_thread(storage.add_pending_link, pending_entry)
-                
+
                 guidance = await get_ai_guidance(link)
-                
-                
+
+
                 view = LinkActionView(link, message.author.id, message, pending_id, self)
-                
+
                 ask_msg = await message.channel.send(
                     f"🤖 **AI Analysis:**\n{guidance}\n\n"
                     f"📎 Save this link, {message.author.mention}?\n`{link}`",
                     view=view
                 )
-                
-            
+
+
                 if pending_id:
                     await asyncio.to_thread(storage.update_pending_with_bot_msg_id, pending_id, ask_msg.id)
 
-            
+
                 self.pending_links[ask_msg.id] = {
                     "link": link,
                     "author_id": message.author.id,
@@ -969,41 +981,41 @@ class LinkManager(commands.Cog):
             return
 
         self.pendinglinks_in_progress.add(user_id)
-        
+
         try:
-            
+
             pending_from_db = await asyncio.to_thread(storage.get_pending_links_for_user, user_id)
-            
-        
+
+
             batch = self.pending_batches.get(user_id, [])
-            
+
             if not pending_from_db and not batch:
                 await ctx.send(f"{ctx.author.mention}, you have no pending links.")
                 return
 
-        
+
             for db_entry in pending_from_db:
                 link = db_entry.get("link")
                 pending_id = db_entry.get("_id")
                 orig_msg_id = db_entry.get("original_message_id")
-                
-            
+
+
                 orig_msg = None
                 try:
                     orig_msg = await ctx.channel.fetch_message(orig_msg_id)
                 except:
                     pass
-                
+
                 guidance = await get_ai_guidance(link)
-    
+
                 view = LinkActionView(link, ctx.author.id, orig_msg, pending_id, self)
-                
+
                 ask_msg = await ctx.send(
                     f"🤖 **AI Analysis:**\n{guidance}\n\n"
                     f"📎 Save this pending link, {ctx.author.mention}?\n`{link}`",
                     view=view
                 )
-                
+
                 # Update DB with bot message ID
                 if pending_id:
                     await asyncio.to_thread(storage.update_pending_with_bot_msg_id, pending_id, ask_msg.id)
@@ -1019,22 +1031,22 @@ class LinkManager(commands.Cog):
                     asyncio.create_task(self._delete_if_no_response(ask_msg, orig_msg, pending_id, delay=AUTO_DELETE_SECONDS))
                 except Exception as e:
                     print(f"Failed to schedule auto-delete for pendinglink prompt: {e}")
-            
+
             for entry in batch:
                 link = entry["link"]
                 orig_msg = entry.get("original_message")
                 pending_id = entry.get("pending_db_id")
-                
+
                 guidance = await get_ai_guidance(link)
-                
+
                 view = LinkActionView(link, ctx.author.id, orig_msg, pending_id, self)
-                
+
                 ask_msg = await ctx.send(
                     f"🤖 **AI Analysis:**\n{guidance}\n\n"
                     f"📎 Save this pending link, {ctx.author.mention}?\n`{link}`",
                     view=view
                 )
-                
+
                 if pending_id:
                     await asyncio.to_thread(storage.update_pending_with_bot_msg_id, pending_id, ask_msg.id)
 
@@ -1054,7 +1066,7 @@ class LinkManager(commands.Cog):
                     del self.pending_batches[user_id]
             except KeyError:
                 pass
-        
+
         finally:
 
             self.pendinglinks_in_progress.discard(user_id)
@@ -1343,7 +1355,7 @@ class LinkManager(commands.Cog):
     async def search_links(self, ctx, *, search_term):
         links = load_links()
 
-        results = [link for link in links if search_term.lower() in link["url"].lower() or 
+        results = [link for link in links if search_term.lower() in link["url"].lower() or
                    search_term.lower() in link["category"].lower()]
 
         if not results:
@@ -1397,7 +1409,7 @@ class LinkManager(commands.Cog):
         for link in links:
             cat = link.get("category", "Uncategorized")
             categories[cat] = categories.get(cat, 0) + 1
-            
+
             try:
                 domain = urlparse(link["url"]).netloc.lower()
                 if domain.startswith('www.'):
@@ -1405,7 +1417,7 @@ class LinkManager(commands.Cog):
                 domains[domain] = domains.get(domain, 0) + 1
             except:
                 pass
-                
+
             author = link.get("author", "Unknown")
             authors[author] = authors.get(author, 0) + 1
 
