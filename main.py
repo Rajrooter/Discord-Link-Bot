@@ -826,7 +826,7 @@ class LinkManager(commands.Cog):
                         ),
                         color=discord.Color.blurple()
                     )
-                    embed.set_footer(text="Digital Labour ❤️",Link="https://i.ibb.co/DfGksW6S/Chat-GPT-Image-Dec-27-2025-01-47-14-AM.png")
+                    embed.set_footer(text="Digital Labour ❤️")
                     await message.channel.send(embed=embed)
                     return
         except Exception as e:
