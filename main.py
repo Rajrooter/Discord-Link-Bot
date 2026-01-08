@@ -286,7 +286,7 @@ def ratelimit_embed(wait_s: float) -> discord.Embed:
 [1;33m╚═══════════════════════════════════════╝[0m
 ```"""
     
-    cooldown_bar = make_progress_bar(int((wait_s / 10) * 100), 25)
+    cooldown_bar = make_progress_bar(min(100, int((wait_s / 10) * 100)), 25)
     
     content = f"""```ansi
 [2;33m>_[0m [1;33m[!][0m [2;37mPlease wait {wait_s:.1f} seconds[0m
