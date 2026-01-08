@@ -729,18 +729,22 @@ intents.members = True
 
 
 def get_prefix(bot, message):
-    prefixes = ["! "]
+    prefixes = ["!"]
     return commands.when_mentioned_or(*prefixes)(bot, message)
 
 
 class MyBot(commands.Bot):
     async def setup_hook(self):
+        # ADD COG FIRST (before syncing)
+        await self.add_cog(LinkManagerCog(self))
+        logger.info("✅ LinkManager cog added")
+        
         synced_commands = []
         try:
             global_synced = await self.tree.sync()
             synced_commands. extend(global_synced)
             logger.info(f"✅ Synced {len(global_synced)} commands globally")
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Global sync failed: {e}")
 
         test_guild_id = os.environ.get("TEST_GUILD_ID")
@@ -755,9 +759,6 @@ class MyBot(commands.Bot):
                 logger.error(f"Test guild sync failed: {e}")
 
         logger.info(f"✅ Total commands synced: {len(synced_commands)}")
-
-
-bot = MyBot(command_prefix=get_prefix, intents=intents, help_command=None)
 
 # ---------------------------------------------------------------------------
 # UI Views
@@ -1896,20 +1897,16 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
 
 @bot.event
 async def on_ready():
-    if not bot.get_cog("LinkManager"):
-        await bot.add_cog(LinkManagerCog(bot))
-        logger.info("LinkManager cog added")
-    
     ready_banner = f"""
 ╔═══════════════════════════════════════════════╗
 ║  🤖 DIGITAL LABOUR BOT ONLINE                 ║
 ╚═══════════════════════════════════════════════╝
->_ User: {bot.user} (ID: {bot.user. id})
+>_ User: {bot.user} (ID: {bot.user.id})
 >_ PID: {os.getpid()}
 >_ Session: {SESSION_ID[: 8]}
->_ AI:  {'ENABLED ✅' if AI_ENABLED else 'DISABLED ⚠️'}
+>_ AI:   {'ENABLED ✅' if AI_ENABLED else 'DISABLED ⚠️'}
 >_ Guilds: {len(bot.guilds)}
-╚══════════════════════════════════��════════════╝
+╚═══════════════════════════════════════════════╝
 """
     logger.info(ready_banner)
 
