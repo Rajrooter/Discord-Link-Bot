@@ -25,7 +25,7 @@ def check_mongodb_connection() -> bool:
         print("   Example: MONGODB_URI=mongodb://localhost:27017")
         return False
 
-    print(f"🔍 Testing MongoDB connection...")
+    print("🔍 Testing MongoDB connection...")
     print(f"   URI: {mongodb_uri[:20]}... (truncated for security)")
     print(f"   Database: {db_name}")
 
@@ -42,7 +42,6 @@ def check_mongodb_connection() -> bool:
 
         # Test connection by pinging
         client.admin.command("ping")
-
         print("✅ MongoDB connection successful!")
 
         # Test database access
@@ -77,7 +76,7 @@ def check_mongodb_connection() -> bool:
 
 
 def test_mongodb_connection():
-    """Pytest entrypoint: assert the connection check passes."""
+    """Pytest entrypoint: assert the connection check passes (no return)."""
     assert check_mongodb_connection()
 
 
