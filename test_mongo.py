@@ -37,26 +37,20 @@ def check_mongodb_connection() -> bool:
         return False
 
     try:
-        # Attempt connection
         client = MongoClient(mongodb_uri, serverSelectionTimeoutMS=5000)
-
-        # Test connection by pinging
         client.admin.command("ping")
         print("✅ MongoDB connection successful!")
 
-        # Test database access
         db = client[db_name]
         collections = db.list_collection_names()
         print(f"✅ Database '{db_name}' accessible")
         print(f"   Existing collections: {collections if collections else 'None (new database)'}")
 
-        # Test basic operations
         test_collection = db["_connection_test"]
         test_doc = {"test": "connection", "timestamp": "test"}
         result = test_collection.insert_one(test_doc)
         print(f"✅ Write test successful (ID: {result.inserted_id})")
 
-        # Clean up test document
         test_collection.delete_one({"_id": result.inserted_id})
         print("✅ Delete test successful")
 
