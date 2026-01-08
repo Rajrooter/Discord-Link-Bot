@@ -450,7 +450,15 @@ class MultiLinkSelectView(discord.ui.View):
             options.append(discord.SelectOption(label=label, value=str(idx), description=desc))
         if not options:
             options.append(discord.SelectOption(label="No valid links", value="0", description="Error"))
-        self.add_item(discord.ui.Select(placeholder=f"Select links to save ({min(len(links),25)} available)", min_values=1, max_values=min(len(options),25), options=options, custom_id="link_selector"))
+
+        select = discord.ui.Select(
+            placeholder=f"Select links to save ({min(len(links),25)} available)",
+            min_values=1,
+            max_values=min(len(options), 25),
+            options=options,
+            custom_id="link_selector"
+        )
+        self.add_item(select)
 
     async def interaction_check(self, interaction):
         if interaction.user.id != self.author_id:
@@ -490,17 +498,31 @@ class ConfirmMultiLinkView(discord.ui.View):
         for idx in self.selected_indices:
             try:
                 link = self.links[idx]["url"]
-                pending_entry = {"user_id": interaction.user.id, "link": link, "channel_id": interaction.channel.id, "original_message_id": self.original_message.id if self.original_message else 0, "timestamp": datetime.datetime.utcnow().isoformat()}
+                pending_entry = {
+                    "user_id": interaction.user.id,
+                    "link": link,
+                    "channel_id": interaction.channel.id,
+                    "original_message_id": self.original_message.id if self.original_message else 0,
+                    "timestamp": datetime.datetime.utcnow().isoformat()
+                }
                 pending_id = await asyncio.to_thread(storage.add_pending_link, pending_entry)
                 saved_count += 1
-                self.cog.links_to_categorize[interaction.user.id] = {"link": link, "message": self.original_message, "pending_db_id": pending_id}
-                await interaction.channel.send(f"{interaction.user.mention}, link {saved_count} saved to queue!\nUse `!category <name>` to save or `!cancel` to skip.\n`{link[:100]}{'...' if len(link)>100 else ''}`")
+                self.cog.links_to_categorize[interaction.user.id] = {
+                    "link": link,
+                    "message": self.original_message,
+                    "pending_db_id": pending_id
+                }
+                await interaction.channel.send(
+                    f"{interaction.user.mention}, link {saved_count} saved to queue!\n"
+                    f"Use `!category <name>` to save or `!cancel` to skip.\n"
+                    f"`{link[:100]}{'...' if len(link)>100 else ''}`"
+                )
             except Exception as e:
                 logger.error(f"Error saving link {idx}: {e}")
         for child in self.children:
             child.disabled = True
         try:
-            await self.message.edit(view=self)
+            await interaction.message.edit(view=self)
         except Exception:
             pass
 
@@ -825,7 +847,16 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                     return
                 # default welcome
                 prefix = await self._get_preferred_prefix(message)
-                embed = discord.Embed(title="👋 Welcome to Digital Labour!", description=f"Hi! I'm Digital Labour 🤖\nI was made by Raj Aryan ❤️\nI help save links and guide students. My prefix is `{prefix}` — try `{prefix}help` or `/`.", color=discord.Color.blurple())
+                embed = discord.Embed(
+                    title="👋 Welcome to Digital Labour!",
+                    description=(
+                        "Hi! I'm Digital Labour 🤖\n"
+                        "I was made by Raj Aryan ❤️\n"
+                        f"I help save links and guide students. My prefix is `{prefix}`.\n"
+                        "Try `!help` or mention me to start."
+                    ),
+                    color=discord.Color.blurple()
+                )
                 await message.channel.send(embed=embed)
                 return
         except Exception:
@@ -904,7 +935,13 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                     dropdown_links = non_media_links[:25]
                     remaining = non_media_links[25:]
                     for link in remaining:
-                        pending_entry = {"user_id": message.author.id, "link": link, "channel_id": message.channel.id, "original_message_id": message.id, "timestamp": datetime.datetime.utcnow().isoformat()}
+                        pending_entry = {
+                            "user_id": message.author.id,
+                            "link": link,
+                            "channel_id": message.channel.id,
+                            "original_message_id": message.id,
+                            "timestamp": datetime.datetime.utcnow().isoformat()
+                        }
                         pending_id = await asyncio.to_thread(storage.add_pending_link, pending_entry)
                         self.pending_batches.setdefault(message.author.id, []).append({"link": link, "original_message": message, "timestamp": time.time(), "pending_db_id": pending_id})
                 else:
@@ -922,7 +959,13 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                 self.event_cleanup.cleanup_old_events(ch_id, BATCH_WINDOW_SECONDS)
                 event_count = self.event_cleanup.get_event_count(ch_id, BATCH_WINDOW_SECONDS)
                 if event_count > BATCH_THRESHOLD:
-                    pending_entry = {"user_id": message.author.id, "link": link, "channel_id": message.channel.id, "original_message_id": message.id, "timestamp": datetime.datetime.utcnow().isoformat()}
+                    pending_entry = {
+                        "user_id": message.author.id,
+                        "link": link,
+                        "channel_id": message.channel.id,
+                        "original_message_id": message.id,
+                        "timestamp": datetime.datetime.utcnow().isoformat()
+                    }
                     pending_id = await asyncio.to_thread(storage.add_pending_link, pending_entry)
                     self.pending_batches.setdefault(message.author.id, []).append({"link": link, "original_message": message, "timestamp": now, "pending_db_id": pending_id})
                     try:
@@ -930,7 +973,13 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                     except Exception:
                         pass
                     continue
-                pending_entry = {"user_id": message.author.id, "link": link, "channel_id": message.channel.id, "original_message_id": message.id, "timestamp": datetime.datetime.utcnow().isoformat()}
+                pending_entry = {
+                    "user_id": message.author.id,
+                    "link": link,
+                    "channel_id": message.channel.id,
+                    "original_message_id": message.id,
+                    "timestamp": datetime.datetime.utcnow().isoformat()
+                }
                 pending_id = await asyncio.to_thread(storage.add_pending_link, pending_entry)
                 guidance = await get_ai_guidance(link)
                 view = LinkActionView(link, message.author.id, message, pending_id, self)
