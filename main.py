@@ -286,14 +286,29 @@ def get_prefix(bot, message):
 
 class MyBot(commands.Bot):
     async def setup_hook(self):
+        synced_commands = []
+
+        # Sync globally (takes up to 1 hour to propagate across Discord)
         try:
-            GUILD_ID = int(os.environ.get("TEST_GUILD_ID", "1383839179846193233"))
-            guild = discord.Object(id=GUILD_ID)
-            self.tree.copy_global_to(guild=guild)
-            synced = await self.tree.sync(guild=guild)
-            logger.info(f"✅ Synced {len(synced)} commands to guild {GUILD_ID}")
+            global_synced = await self.tree.sync()
+            synced_commands.extend(global_synced)
+            logger.info(f"✅ Synced {len(global_synced)} commands globally")
         except Exception as e:
-            logger.error(f"setup_hook sync failed: {e}")
+            logger.error(f"Global sync failed: {e}")
+
+        # Sync to specific test guild for instant updates (optional)
+        test_guild_id = os.environ.get("TEST_GUILD_ID")
+        if test_guild_id:
+            try:
+                guild_id = int(test_guild_id)
+                guild = discord.Object(id=guild_id)
+                self.tree.copy_global_to(guild=guild)
+                guild_synced = await self.tree.sync(guild=guild)
+                logger.info(f"✅ Synced {len(guild_synced)} commands to test guild {guild_id}")
+            except Exception as e:
+                logger.error(f"Test guild sync failed: {e}")
+
+        logger.info(f"✅ Total commands synced: {len(synced_commands)}")
 
 bot = MyBot(command_prefix=get_prefix, intents=intents, help_command=commands.DefaultHelpCommand())
 
