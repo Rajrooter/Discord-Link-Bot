@@ -331,21 +331,28 @@ class SummarizeView(discord.ui.View):
 
     @discord.ui.button(label="Summarize file", style=discord.ButtonStyle.green, emoji="📝")
     async def summarize_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
-        data = await download_bytes(self.file_url)
-        if not data:
-            await interaction.followup.send("⚠️ Failed to download the file.", ephemeral=True)
-            return
-        await interaction.followup.send("🔎 Summarizing — this may take a few seconds...", ephemeral=True)
-        summary = await summarize_document_bytes(self.filename, data, context_note=self.context_note)
-        # share in the channel
-        await interaction.channel.send(f"**Summary of {self.filename} (requested by {interaction.user.mention})**\n\n{summary}")
-        for child in self.children:
-            child.disabled = True
         try:
-            await interaction.message.edit(view=self)
-        except Exception:
-            pass
+            await interaction.response.defer()
+            data = await download_bytes(self.file_url)
+            if not data:
+                await interaction.followup.send("⚠️ Failed to download the file.", ephemeral=True)
+                return
+            await interaction.followup.send("🔎 Summarizing — this may take a few seconds...", ephemeral=True)
+            summary = await summarize_document_bytes(self.filename, data, context_note=self.context_note)
+            await interaction.channel.send(f"**Summary of {self.filename} (requested by {interaction.user.mention})**\n\n{summary}")
+        except Exception as e:
+            logger.error(f"Summarize button failed: {e}")
+            try:
+                await interaction.followup.send("⚠️ Summarization failed. Please try again.", ephemeral=True)
+            except Exception:
+                pass
+        finally:
+            for child in self.children:
+                child.disabled = True
+            try:
+                await interaction.message.edit(view=self)
+            except Exception:
+                pass
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -356,9 +363,6 @@ class SummarizeView(discord.ui.View):
             await interaction.message.edit(view=self)
         except Exception:
             pass
-
-# Reuse previously-defined link-management views (DisclaimerView, LinkActionView, MultiLinkSelectView, ConfirmMultiLinkView, ConfirmDeleteView)
-# For brevity, their implementations are identical to earlier full versions and included here as needed.
 
 class DisclaimerView(discord.ui.View):
     def __init__(self, links: list, author_id: int, original_message, cog):
@@ -414,18 +418,23 @@ class LinkActionView(discord.ui.View):
 
     @discord.ui.button(label="Save", style=discord.ButtonStyle.green, emoji="✅")
     async def save_button(self, interaction, button):
-        await asyncio.to_thread(storage.delete_pending_link_by_id, self.pending_db_id)
-        if interaction.message.id in self.cog.pending_links:
-            del self.cog.pending_links[interaction.message.id]
-        self.cog.links_to_categorize[self.author_id] = {"link": self.link, "message": self.original_message}
-        prefix = await self.cog._get_preferred_prefix(self.original_message) if self.original_message else "!"
-        await interaction.response.send_message(f"✅ Link marked for saving! Use `{prefix}category <name>` to finalize.", ephemeral=True)
-        for child in self.children:
-            child.disabled = True
         try:
-            await interaction.message.edit(view=self)
-        except Exception:
-            pass
+            await asyncio.to_thread(storage.delete_pending_link_by_id, self.pending_db_id)
+            if interaction.message.id in self.cog.pending_links:
+                del self.cog.pending_links[interaction.message.id]
+            self.cog.links_to_categorize[self.author_id] = {"link": self.link, "message": self.original_message}
+            prefix = await self.cog._get_preferred_prefix(self.original_message) if self.original_message else "!"
+            await interaction.response.send_message(f"✅ Link marked for saving! Use `{prefix}category <name>` to finalize.", ephemeral=True)
+        except Exception as e:
+            logger.error(f"Save failed: {e}")
+            await interaction.response.send_message("⚠️ Failed to mark link for saving. Please try again.", ephemeral=True)
+        finally:
+            for child in self.children:
+                child.disabled = True
+            try:
+                await interaction.message.edit(view=self)
+            except Exception:
+                pass
 
     @discord.ui.button(label="Ignore", style=discord.ButtonStyle.red, emoji="❌")
     async def ignore_button(self, interaction, button):
@@ -519,6 +528,10 @@ class ConfirmMultiLinkView(discord.ui.View):
                 )
             except Exception as e:
                 logger.error(f"Error saving link {idx}: {e}")
+                try:
+                    await interaction.channel.send("⚠️ Failed to save one of the links. Please try again.")
+                except Exception:
+                    pass
         for child in self.children:
             child.disabled = True
         try:
@@ -551,24 +564,32 @@ class ConfirmDeleteView(discord.ui.View):
     async def confirm_button(self, interaction, button):
         try:
             if self.original_message:
-                await self.original_message.delete()
-        except Exception:
-            pass
-        try:
-            bot_msg = await interaction.channel.fetch_message(self.bot_msg_id)
-            await bot_msg.delete()
-        except Exception:
-            pass
-        await asyncio.to_thread(storage.delete_pending_link_by_id, self.pending_db_id)
-        if self.bot_msg_id in self.cog.pending_links:
-            del self.cog.pending_links[self.bot_msg_id]
-        await interaction.response.send_message("🗑️ Link deleted successfully.", ephemeral=True)
-        for child in self.children:
-            child.disabled = True
-        try:
-            await interaction.message.edit(view=self)
-        except Exception:
-            pass
+                try:
+                    await self.original_message.delete()
+                except Exception:
+                    pass
+            try:
+                bot_msg = await interaction.channel.fetch_message(self.bot_msg_id)
+                await bot_msg.delete()
+            except Exception:
+                pass
+            try:
+                await asyncio.to_thread(storage.delete_pending_link_by_id, self.pending_db_id)
+            except Exception as e:
+                logger.error(f"Pending delete failed: {e}")
+            if self.bot_msg_id in self.cog.pending_links:
+                del self.cog.pending_links[self.bot_msg_id]
+            await interaction.response.send_message("🗑️ Link deleted successfully.", ephemeral=True)
+        except Exception as e:
+            logger.error(f"Confirm delete failed: {e}")
+            await interaction.response.send_message("⚠️ Could not delete link. Please try again.", ephemeral=True)
+        finally:
+            for child in self.children:
+                child.disabled = True
+            try:
+                await interaction.message.edit(view=self)
+            except Exception:
+                pass
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
     async def cancel_button(self, interaction, button):
@@ -829,23 +850,19 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
 
         return False
 
-    # on_message integrates mention handling, file summarization, onboarding, link handling
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author == self.bot.user or message.id in self.processed_messages:
             return
         self.processed_messages.add(message.id)
 
-        # process commands first
         await self.bot.process_commands(message)
 
-        # if bot mentioned -> handle intents
         try:
             if self.bot.user in message.mentions:
                 handled = await self._handle_mention_query(message)
                 if handled:
                     return
-                # default welcome
                 prefix = await self._get_preferred_prefix(message)
                 embed = discord.Embed(
                     title="👋 Welcome to Digital Labour!",
@@ -862,7 +879,6 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
         except Exception:
             logger.debug("mention handler error", exc_info=True)
 
-        # file summarization trigger: attachments or direct file links
         try:
             file_candidates = []
             for att in message.attachments:
@@ -881,7 +897,6 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
         except Exception:
             logger.debug("file summarize trigger error", exc_info=True)
 
-        # onboarding (kept minimal and same as original)
         onboarding_data = storage.load_onboarding_data()
         user_id = str(message.author.id)
         if user_id in onboarding_data:
@@ -910,7 +925,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                 embed.add_field(name="Referral", value=user_data["data"]["referral"], inline=True)
                 embed.set_footer(text="React with ✅ to confirm or ❌ to start over")
                 msg = await message.channel.send(embed=embed)
-                await msg.add_reaction('✅')
+                await msg.add_reaction('��')
                 await msg.add_reaction('❌')
                 user_data["message_id"] = msg.id
                 onboarding_data[user_id] = user_data
@@ -921,7 +936,6 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                     pass
                 return
 
-        # link detection and handling (kept behavior)
         try:
             urls = [m.group(0) for m in re.finditer(URL_REGEX, message.content or "")]
         except re.error:
@@ -935,15 +949,19 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                     dropdown_links = non_media_links[:25]
                     remaining = non_media_links[25:]
                     for link in remaining:
-                        pending_entry = {
-                            "user_id": message.author.id,
-                            "link": link,
-                            "channel_id": message.channel.id,
-                            "original_message_id": message.id,
-                            "timestamp": datetime.datetime.utcnow().isoformat()
-                        }
-                        pending_id = await asyncio.to_thread(storage.add_pending_link, pending_entry)
-                        self.pending_batches.setdefault(message.author.id, []).append({"link": link, "original_message": message, "timestamp": time.time(), "pending_db_id": pending_id})
+                        try:
+                            pending_entry = {
+                                "user_id": message.author.id,
+                                "link": link,
+                                "channel_id": message.channel.id,
+                                "original_message_id": message.id,
+                                "timestamp": datetime.datetime.utcnow().isoformat()
+                            }
+                            pending_id = await asyncio.to_thread(storage.add_pending_link, pending_entry)
+                            self.pending_batches.setdefault(message.author.id, []).append({"link": link, "original_message": message, "timestamp": time.time(), "pending_db_id": pending_id})
+                        except Exception as e:
+                            logger.error(f"Failed to queue link (batch overflow): {e}")
+                            await message.channel.send("⚠️ Failed to queue one of the links. Please try again.")
                 else:
                     dropdown_links = non_media_links
                 disclaimer_embed = discord.Embed(title="💡 Multiple Links Detected", description=f"I found **{len(non_media_links)}** links. Save any?", color=discord.Color.gold())
@@ -959,6 +977,26 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                 self.event_cleanup.cleanup_old_events(ch_id, BATCH_WINDOW_SECONDS)
                 event_count = self.event_cleanup.get_event_count(ch_id, BATCH_WINDOW_SECONDS)
                 if event_count > BATCH_THRESHOLD:
+                    try:
+                        pending_entry = {
+                            "user_id": message.author.id,
+                            "link": link,
+                            "channel_id": message.channel.id,
+                            "original_message_id": message.id,
+                            "timestamp": datetime.datetime.utcnow().isoformat()
+                        }
+                        pending_id = await asyncio.to_thread(storage.add_pending_link, pending_entry)
+                        self.pending_batches.setdefault(message.author.id, []).append({"link": link, "original_message": message, "timestamp": now, "pending_db_id": pending_id})
+                        try:
+                            await message.add_reaction("🗂️")
+                        except Exception:
+                            pass
+                        continue
+                    except Exception as e:
+                        logger.error(f"Failed to queue link (burst): {e}")
+                        await message.channel.send("⚠️ Failed to queue this link. Please try again.")
+                        continue
+                try:
                     pending_entry = {
                         "user_id": message.author.id,
                         "link": link,
@@ -967,34 +1005,23 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                         "timestamp": datetime.datetime.utcnow().isoformat()
                     }
                     pending_id = await asyncio.to_thread(storage.add_pending_link, pending_entry)
-                    self.pending_batches.setdefault(message.author.id, []).append({"link": link, "original_message": message, "timestamp": now, "pending_db_id": pending_id})
+                    guidance = await get_ai_guidance(link)
+                    view = LinkActionView(link, message.author.id, message, pending_id, self)
+                    ask_msg = await message.channel.send(f"🤖 **AI Analysis:**\n{guidance}\n\n📎 Save this link, {message.author.mention}?\n`{link}`", view=view)
+                    if pending_id:
+                        try:
+                            await asyncio.to_thread(storage.update_pending_with_bot_msg_id, pending_id, ask_msg.id)
+                        except Exception as e:
+                            logger.error(f"Failed to update pending with bot msg id: {e}")
+                    self.pending_links[ask_msg.id] = {"link": link, "author_id": message.author.id, "original_message": message, "pending_db_id": pending_id}
                     try:
-                        await message.add_reaction("🗂️")
+                        asyncio.create_task(self._delete_if_no_response(ask_msg, message, pending_id, delay=AUTO_DELETE_SECONDS))
                     except Exception:
                         pass
-                    continue
-                pending_entry = {
-                    "user_id": message.author.id,
-                    "link": link,
-                    "channel_id": message.channel.id,
-                    "original_message_id": message.id,
-                    "timestamp": datetime.datetime.utcnow().isoformat()
-                }
-                pending_id = await asyncio.to_thread(storage.add_pending_link, pending_entry)
-                guidance = await get_ai_guidance(link)
-                view = LinkActionView(link, message.author.id, message, pending_id, self)
-                ask_msg = await message.channel.send(f"🤖 **AI Analysis:**\n{guidance}\n\n📎 Save this link, {message.author.mention}?\n`{link}`", view=view)
-                if pending_id:
-                    await asyncio.to_thread(storage.update_pending_with_bot_msg_id, pending_id, ask_msg.id)
-                self.pending_links[ask_msg.id] = {"link": link, "author_id": message.author.id, "original_message": message, "pending_db_id": pending_id}
-                try:
-                    asyncio.create_task(self._delete_if_no_response(ask_msg, message, pending_id, delay=AUTO_DELETE_SECONDS))
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.error(f"Failed to process link: {e}")
+                    await message.channel.send("⚠️ Failed to handle this link. Please try again.")
 
-    # -------------------------
-    # Hybrid commands (many preserved)
-    # -------------------------
     @commands.hybrid_command(name="pendinglinks", description="Review your pending links captured during bursts")
     async def pendinglinks(self, ctx: commands.Context):
         user_id = ctx.author.id
@@ -1007,7 +1034,12 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
             return
         self.pendinglinks_in_progress.add(user_id)
         try:
-            pending_from_db = await asyncio.to_thread(storage.get_pending_links_for_user, user_id)
+            try:
+                pending_from_db = await asyncio.to_thread(storage.get_pending_links_for_user, user_id)
+            except Exception as e:
+                logger.error(f"pendinglinks fetch failed: {e}")
+                await ctx.send("⚠️ Could not load pending links right now. Please try again.")
+                return
             batch = self.pending_batches.get(user_id, [])
             if not pending_from_db and not batch:
                 await ctx.send(f"{ctx.author.mention}, you have no pending links.")
@@ -1025,7 +1057,10 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                 view = LinkActionView(link, ctx.author.id, orig_msg, pending_id, self)
                 ask_msg = await ctx.send(f"🤖 **AI Analysis:**\n{guidance}\n\n📎 Save this pending link, {ctx.author.mention}?\n`{link}`", view=view)
                 if pending_id:
-                    await asyncio.to_thread(storage.update_pending_with_bot_msg_id, pending_id, ask_msg.id)
+                    try:
+                        await asyncio.to_thread(storage.update_pending_with_bot_msg_id, pending_id, ask_msg.id)
+                    except Exception as e:
+                        logger.error(f"Failed to update pending with bot msg id: {e}")
                 self.pending_links[ask_msg.id] = {"link": link, "author_id": ctx.author.id, "original_message": orig_msg, "pending_db_id": pending_id}
                 try:
                     asyncio.create_task(self._delete_if_no_response(ask_msg, orig_msg, pending_id, delay=AUTO_DELETE_SECONDS))
@@ -1039,7 +1074,10 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                 view = LinkActionView(link, ctx.author.id, orig_msg, pending_id, self)
                 ask_msg = await ctx.send(f"🤖 **AI Analysis:**\n{guidance}\n\n📎 Save this pending link, {ctx.author.mention}?\n`{link}`", view=view)
                 if pending_id:
-                    await asyncio.to_thread(storage.update_pending_with_bot_msg_id, pending_id, ask_msg.id)
+                    try:
+                        await asyncio.to_thread(storage.update_pending_with_bot_msg_id, pending_id, ask_msg.id)
+                    except Exception as e:
+                        logger.error(f"Failed to update pending with bot msg id: {e}")
                 self.pending_links[ask_msg.id] = {"link": link, "author_id": ctx.author.id, "original_message": orig_msg, "pending_db_id": pending_id}
                 try:
                     asyncio.create_task(self._delete_if_no_response(ask_msg, orig_msg, pending_id, delay=AUTO_DELETE_SECONDS))
@@ -1052,18 +1090,22 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
 
     @commands.hybrid_command(name="category", description="Assign a category to a saved link")
     async def assign_category(self, ctx: commands.Context, *, category_name: str):
-        if ctx.author.id in self.links_to_categorize:
-            link_data = self.links_to_categorize[ctx.author.id]
-            link = link_data["link"]
-            message = link_data["message"]
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if ctx.author.id not in self.links_to_categorize:
+            await ctx.send(f"No pending link to categorize, {ctx.author.mention}")
+            return
+        link_data = self.links_to_categorize[ctx.author.id]
+        link = link_data["link"]
+        message = link_data["message"]
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        try:
             link_entry = {"url": link, "timestamp": timestamp, "author": str(message.author) if (message and message.author) else "Unknown", "category": category_name}
             await asyncio.to_thread(storage.add_saved_link, link_entry)
             await asyncio.to_thread(storage.add_link_to_category, category_name, link)
             await ctx.send(f"✅ Link saved to '{category_name}', {ctx.author.mention}!")
             del self.links_to_categorize[ctx.author.id]
-        else:
-            await ctx.send(f"No pending link to categorize, {ctx.author.mention}")
+        except Exception as e:
+            logger.error(f"assign_category failed: {e}")
+            await ctx.send("⚠️ Failed to save the link. Please try again.")
 
     @commands.hybrid_command(name="cancel", description="Cancel saving a pending link")
     async def cancel_save(self, ctx: commands.Context):
@@ -1110,28 +1152,32 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
 
     @commands.hybrid_command(name="deletelink", description="Delete a link by number")
     async def delete_link(self, ctx: commands.Context, link_number: int):
-        links = storage.get_saved_links()
-        if not links:
-            await ctx.send("No links to delete!")
-            return
-        if link_number < 1 or link_number > len(links):
-            await ctx.send(f"Invalid number! Use 1-{len(links)}.")
-            return
-        removed = links.pop(link_number - 1)
-        storage.clear_saved_links()
-        for l in links:
-            storage.add_saved_link(l)
-        cats = storage.get_categories()
-        cat_name = removed.get("category")
-        if cat_name in cats and removed.get("url") in cats[cat_name]:
-            cats[cat_name].remove(removed.get("url"))
-            if not cats[cat_name]:
-                del cats[cat_name]
-            storage.clear_categories()
-            for k, vs in cats.items():
-                for v in vs:
-                    storage.add_link_to_category(k, v)
-        await ctx.send(f"✅ Link {link_number} deleted!")
+        try:
+            links = storage.get_saved_links()
+            if not links:
+                await ctx.send("No links to delete!")
+                return
+            if link_number < 1 or link_number > len(links):
+                await ctx.send(f"Invalid number! Use 1-{len(links)}.")
+                return
+            removed = links.pop(link_number - 1)
+            storage.clear_saved_links()
+            for l in links:
+                storage.add_saved_link(l)
+            cats = storage.get_categories()
+            cat_name = removed.get("category")
+            if cat_name in cats and removed.get("url") in cats[cat_name]:
+                cats[cat_name].remove(removed.get("url"))
+                if not cats[cat_name]:
+                    del cats[cat_name]
+                storage.clear_categories()
+                for k, vs in cats.items():
+                    for v in vs:
+                        storage.add_link_to_category(k, v)
+            await ctx.send(f"✅ Link {link_number} deleted!")
+        except Exception as e:
+            logger.error(f"delete_link failed: {e}")
+            await ctx.send("⚠️ Failed to delete the link. Please try again.")
 
     @commands.hybrid_command(name="deletecategory", description="Delete a category and its links")
     async def delete_category(self, ctx: commands.Context, *, category_name: str):
@@ -1139,18 +1185,26 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
         if category_name not in cats:
             await ctx.send(f"Category '{category_name}' doesn't exist!")
             return
-        confirm = await ctx.send(f"Delete '{category_name}' and its {len(cats[category_name])} links? React ✅ to confirm.")
-        await confirm.add_reaction("✅")
-        await confirm.add_reaction("❌")
-        self.pending_category_deletion[confirm.id] = {"category": category_name, "author_id": ctx.author.id}
+        try:
+            confirm = await ctx.send(f"Delete '{category_name}' and its {len(cats[category_name])} links? React ✅ to confirm.")
+            await confirm.add_reaction("✅")
+            await confirm.add_reaction("❌")
+            self.pending_category_deletion[confirm.id] = {"category": category_name, "author_id": ctx.author.id}
+        except Exception as e:
+            logger.error(f"delete_category prompt failed: {e}")
+            await ctx.send("⚠️ Failed to start deletion confirmation. Please try again.")
 
     @commands.hybrid_command(name="clearlinks", description="Clear all links (Admin)")
     @commands.has_permissions(administrator=True)
     async def clear_links(self, ctx: commands.Context):
-        confirm = await ctx.send("⚠️ Delete ALL links and categories? React ✅ to confirm.")
-        await confirm.add_reaction("✅")
-        await confirm.add_reaction("❌")
-        self.pending_clear_all[confirm.id] = {"author_id": ctx.author.id}
+        try:
+            confirm = await ctx.send("⚠️ Delete ALL links and categories? React ✅ to confirm.")
+            await confirm.add_reaction("✅")
+            await confirm.add_reaction("❌")
+            self.pending_clear_all[confirm.id] = {"author_id": ctx.author.id}
+        except Exception as e:
+            logger.error(f"clear_links prompt failed: {e}")
+            await ctx.send("⚠️ Failed to start clear confirmation. Please try again.")
 
     @commands.hybrid_command(name="searchlinks", description="Search saved links")
     async def search_links(self, ctx: commands.Context, *, search_term: str):
@@ -1223,7 +1277,6 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
             response += f"{i}. **[{l.get('category','Uncategorized')}]** {l['url']}\n   *by {l.get('author','Unknown')} at {l.get('timestamp','')}*\n"
         await ctx.send(response)
 
-    # Admin audit
     @commands.hybrid_command(name="audit_server", description="(Admin) Run an AI audit for a topic")
     @commands.has_permissions(manage_guild=True)
     async def audit_server(self, ctx: commands.Context, *, topic: str = "full server"):
