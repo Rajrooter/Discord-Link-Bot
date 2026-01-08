@@ -4,3 +4,5 @@ aiohttp>=3.8.0
 PyPDF2>=3.0.0
 python-docx>=0.8.11
 google-genai>=0.10.0
+pytest
+pytest-asyncio
