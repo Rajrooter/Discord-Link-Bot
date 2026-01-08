@@ -172,7 +172,7 @@ def verdict_embed(link: str, verdict_text: str, reason: str, author_mention: str
 [1;36m│[0m
 [1;36m│[0m {status} [1;37m{verdict_text}[0m
 [1;36m│[0m
-[1;36m│[0m [2;37mReason:[0m [1;37m{reason[:50]}[0m
+[1;36m│[0m [2;37mReason:[0m [1;37m{reason[:50]}{'...' if len(reason) > 50 else ''}[0m
 [1;36m│[0m
 [1;36m└────────────────────────────────────────┘[0m
 
@@ -218,7 +218,7 @@ def summarize_progress_embed(filename: str) -> discord.Embed:
     
     progress = f"""```ansi
 [2;36m┌─[0m [1;37mFILE[0m [2;36m────────────────────────────────┐[0m
-[2;36m│[0m [1;33m{filename[:35]}[0m
+[2;36m│[0m [1;33m{filename[:35]}{'...' if len(filename) > 35 else ''}[0m
 [2;36m└──────────────────────────────────────┘[0m
 
 [1;36m>_[0m [2;37mExtracting text...[0m
@@ -243,10 +243,12 @@ def summarize_result_embed(filename: str, body: str, requester: str) -> discord.
 [2;35m║[0m  [1;37m📝 SUMMARY COMPLETE[0m                 [2;35m║[0m
 [2;35m╚═══════════════════════════════════════╝[0m
 
-[1;36m>_[0m [1;37mFile:[0m [1;33m{filename[:40]}[0m
+[1;36m>_[0m [1;37mFile:[0m [1;33m{filename[:40]}{'...' if len(filename) > 40 else ''}[0m
 ```"""
     
     summary_content = body[:3500] if len(body) > 3500 else body
+    if len(body) > 3500:
+        summary_content += "\n\n_[Content truncated for display]_"
     
     return make_embed(
         title="",
@@ -265,7 +267,7 @@ def error_embed(msg: str) -> discord.Embed:
 ```"""
     
     error_content = f"""```ansi
-[2;31m>_[0m [1;31m[ERROR][0m [2;37m{msg[:200]}[0m
+[2;31m>_[0m [1;31m[ERROR][0m [2;37m{msg[:200]}{'...' if len(msg) > 200 else ''}[0m
 ```
 
 **🔧 Action Required:** Check your input and try again."""
