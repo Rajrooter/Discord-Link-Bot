@@ -1203,7 +1203,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
 
     async def _handle_mention_query(self, message: discord.Message) -> bool:
         user_id = message.author.id
-        if self.rate_limiter.is_limited(user_id, "ai_mention", cooldown=8. 0):
+        if self.rate_limiter.is_limited(user_id, "ai_mention", cooldown=8.0):
             remaining = self.rate_limiter. get_remaining(user_id, "ai_mention", cooldown=8.0)
             await safe_send(message. channel, embed=ratelimit_embed(remaining))
             return True
