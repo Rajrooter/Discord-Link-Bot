@@ -84,45 +84,7 @@ IGNORED_EXTENSIONS = ['.gif', '.png', '.jpg', '.jpeg', '. webp', '.bmp', '.mp4',
 COMMUNITY_LEARNING_URL = os.environ.get("COMMUNITY_LEARNING_URL", "https://share.google/yf57dJNzEyAVM0asz")
 
 # ---------------------------------------------------------------------------
-# Cyberpunk Theme Helpers
-# ---------------------------------------------------------------------------
-
-def make_cyberpunk_header(title: str, subtitle: str = "") -> str:
-    """Generate cyberpunk ASCII art header"""
-    header = f"""```ansi
-[2;36m╔═══════════════════════════════════════════════╗[0m
-[2;36m║[0m  [1;37m{title[: 40]: ^40}[0m  [2;36m║[0m
-"""
-    if subtitle:
-        header += f"[2;36m║[0m  [2;33m{subtitle[:40]:^40}[0m  [2;36m║[0m\n"
-    header += "[2;36m╚═══════════════════════════════════════════════╝[0m\n```"
-    return header
-
-
-def make_status_indicator(status: str) -> str:
-    """Return colored status badge"""
-    badges = {
-        "online": "[1;32m[ONLINE][0m",
-        "ok": "[1;32m[OK][0m",
-        "error": "[1;31m[ERROR][0m",
-        "warning": "[1;33m[! ][0m",
-        "safe": "[1;32m[SAFE][0m",
-        "caution": "[1;33m[CAUTION][0m",
-        "unsafe": "[1;31m[UNSAFE][0m",
-        "processing": "[1;36m[PROCESSING][0m",
-    }
-    return badges. get(status. lower(), f"[1;37m[{status.upper()}][0m")
-
-
-def make_progress_bar(percentage: int, width: int = 20) -> str:
-    """Create ASCII progress bar"""
-    filled = int((percentage / 100) * width)
-    bar = "█" * filled + "░" * (width - filled)
-    return f"[1;32m{bar}[0m [1;37m{percentage}%[0m"
-
-
-# ---------------------------------------------------------------------------
-# Enhanced Embed / UI helpers
+# Embed / UI helpers
 # ---------------------------------------------------------------------------
 
 def make_embed(
@@ -132,12 +94,12 @@ def make_embed(
     footer: str = "",
     fields: Optional[List[Dict[str, str]]] = None,
 ) -> discord.Embed:
-    """Enhanced embed builder"""
-    embed = discord.Embed(title=title[: 256], description=description[:4000], color=color)
+    """Simple embed builder"""
+    embed = discord.Embed(title=title[:256], description=description[:4000], color=color)
     if fields:
         for f in fields:
             embed.add_field(
-                name=f. get("name", "")[:256],
+                name=f.get("name", "")[:256],
                 value=f.get("value", "")[:1024],
                 inline=f.get("inline", False),
             )
@@ -148,162 +110,74 @@ def make_embed(
 
 
 def verdict_embed(link: str, verdict_text: str, reason: str, author_mention: str = "") -> discord.Embed:
-    """Enhanced AI verdict with cyberpunk terminal styling"""
-    
-    # Determine color based on verdict
+    """Simple AI verdict embed"""
     if "Keep" in verdict_text or "Safe" in verdict_text:
-        color = 0x00FF9C
-        status = make_status_indicator("safe")
-    elif "Skip" in verdict_text or "Caution" in verdict_text: 
-        color = 0xFF6600
-        status = make_status_indicator("caution")
-    elif "Unsafe" in verdict_text: 
-        color = 0xFF0055
-        status = make_status_indicator("unsafe")
+        color = discord.Color.green()
+    elif "Skip" in verdict_text or "Caution" in verdict_text:
+        color = discord.Color.orange()
+    elif "Unsafe" in verdict_text:
+        color = discord.Color.red()
     else:
-        color = 0x00D9FF
-        status = make_status_indicator("processing")
+        color = discord.Color.blue()
     
-    header = """```ansi
-[2;36m╔═══════════════════════════════════════╗[0m
-[2;36m║[0m  [1;37m📎 LINK ANALYSIS COMPLETE[0m           [2;36m║[0m
-[2;36m╚═══════════════════════════════════════╝[0m
-```"""
-    
-    verdict_box = f"""```ansi
-[1;36m┌─[0m [1;37mAI VERDICT[0m [1;36m────────────────────────────┐[0m
-[1;36m│[0m
-[1;36m│[0m {status} [1;37m{verdict_text}[0m
-[1;36m│[0m
-[1;36m│[0m [2;37mReason:[0m [1;37m{reason[: 50]}[0m
-[1;36m│[0m
-[1;36m└────────────────────────────────────────┘[0m
-
-[2;35m>_[0m [2;37mURL:[0m [2;36m{link[: 60]}{'...' if len(link) > 60 else ''}[0m
-```"""
-    
-    footer_text = f"Analyzed for {author_mention}" if author_mention else "Neural analysis complete"
-    
-    return make_embed(
-        title="",
-        description=header + verdict_box,
-        color=color,
-        footer=footer_text,
+    embed = discord.Embed(
+        title="📎 Link Analysis",
+        description=f"**{verdict_text}**\n{reason}\n\n`{link[:100]}{'...' if len(link) > 100 else ''}`",
+        color=color
     )
+    if author_mention:
+        embed.set_footer(text=f"Analyzed for {author_mention}")
+    embed.timestamp = datetime.datetime.utcnow()
+    return embed
 
 
 def multi_link_embed(count: int) -> discord.Embed:
-    """Cyberpunk multi-link selection prompt"""
-    header = make_cyberpunk_header("MULTIPLE LINKS DETECTED", f"{count} URLs found")
-    
-    content = f"""```ansi
-[1;36m>_[0m [1;37mSelect the links you want to save[0m
-[2;36m├─>[0m [2;37mUse the dropdown menu below[0m
-[2;36m├─>[0m [2;37mYou can select multiple links[0m
-[2;36m└─>[0m [2;37mIgnore the rest automatically[0m
-```
-
-**💡 Tip:** Choose only what you need for better organization."""
-    
+    """Simple multi-link selection prompt"""
     return make_embed(
-        title="",
-        description=header + content,
-        color=0xFFFF00,
-        footer="Batch selection mode active",
+        title=f"📎 {count} Links Found",
+        description="Select the links you want to save using the dropdown menu below.\nYou can select multiple links.",
+        color=discord.Color.gold(),
+        footer="Tip: Choose only what you need for better organization"
     )
 
 
 def summarize_progress_embed(filename: str) -> discord.Embed:
-    """Terminal-style progress indicator"""
-    header = """```ansi
-[1;35m>_[0m [1;35m[PROCESSING][0m [1;37mDOCUMENT ANALYSIS[0m
-```"""
-    
-    progress = f"""```ansi
-[2;36m┌─[0m [1;37mFILE[0m [2;36m────────────────────────────────┐[0m
-[2;36m│[0m [1;33m{filename[: 35]}[0m
-[2;36m└──────────────────────────────────────┘[0m
-
-[1;36m>_[0m [2;37mExtracting text.. .[0m
-[1;36m>_[0m [2;37mAnalyzing content...[0m
-[1;36m>_[0m [2;37mGenerating summary...[0m
-
-{make_progress_bar(66, 30)}
-```"""
-    
+    """Simple progress indicator"""
     return make_embed(
-        title="",
-        description=header + progress,
-        color=0xFF00FF,
-        footer="AI summarization in progress • Please wait",
+        title="📝 Summarizing Document",
+        description=f"Working on **{filename}**… this may take a few seconds.",
+        color=discord.Color.blue(),
+        footer="AI summarization in progress"
     )
 
 
 def summarize_result_embed(filename: str, body: str, requester: str) -> discord.Embed:
-    """Structured summary output with cyberpunk styling"""
-    header = f"""```ansi
-[2;35m╔═══════════════════════════════════════╗[0m
-[2;35m║[0m  [1;37m📝 SUMMARY COMPLETE[0m                 [2;35m║[0m
-[2;35m╚═══════════════════════════════════════╝[0m
-
-[1;36m>_[0m [1;37mFile:[0m [1;33m{filename[:40]}[0m
-```"""
-    
-    summary_content = body[:3500] if len(body) > 3500 else body
-    
+    """Simple summary output"""
     return make_embed(
-        title="",
-        description=header + f"\n{summary_content}",
-        color=0x00FF9C,
-        footer=f"Summarized for {requester} • AI-powered analysis",
+        title=f"📝 Summary: {filename}",
+        description=body[:3500] if len(body) > 3500 else body,
+        color=discord.Color.green(),
+        footer=f"Summarized for {requester} • AI-powered"
     )
 
 
 def error_embed(msg: str) -> discord.Embed:
-    """Cyberpunk-styled error message with red alert theme"""
-    header = """```ansi
-[1;31m╔═══════════════════════════════════════╗[0m
-[1;31m║[0m  [1;37m⚠️  SYSTEM ERROR DETECTED[0m          [1;31m║[0m
-[1;31m╚═══════════════════════════════════════╝[0m
-```"""
-    
-    error_content = f"""```ansi
-[2;31m>_[0m [1;31m[ERROR][0m [2;37m{msg[:200]}[0m
-```
-
-**🔧 Action Required:** Check your input and try again."""
-    
+    """Simple error message"""
     return make_embed(
-        title="",
-        description=header + error_content,
-        color=0xFF0055,
-        footer="If this persists, contact an administrator",
+        title="⚠️ Error",
+        description=msg[:200],
+        color=discord.Color.red(),
+        footer="If this persists, contact an administrator"
     )
 
 
 def ratelimit_embed(wait_s: float) -> discord.Embed:
-    """Cooldown timer with visual progress bar"""
-    header = """```ansi
-[1;33m╔═══════════════════════════════════════╗[0m
-[1;33m║[0m  [1;37m⏳ COOLDOWN ACTIVE[0m                  [1;33m║[0m
-[1;33m╚═══════════════════════════════════════╝[0m
-```"""
-    
-    cooldown_bar = make_progress_bar(int((wait_s / 10) * 100), 25)
-    
-    content = f"""```ansi
-[2;33m>_[0m [1;33m[! ][0m [2;37mPlease wait {wait_s:. 1f} seconds[0m
-
-{cooldown_bar}
-```
-
-**⚡ Tip:** This prevents spam and keeps the bot responsive."""
-    
+    """Simple cooldown message"""
     return make_embed(
-        title="",
-        description=header + content,
-        color=0xFF6600,
-        footer="Rate limit protection active",
+        title="⏳ Cooldown Active",
+        description=f"Please wait **{wait_s:.1f}s** before using this again.\n\nThis prevents spam and keeps the bot responsive.",
+        color=discord.Color.orange(),
+        footer="Rate limit protection"
     )
 
 
@@ -759,7 +633,13 @@ class MyBot(commands.Bot):
                 logger.error(f"Test guild sync failed: {e}")
 
         logger.info(f"✅ Total commands synced: {len(synced_commands)}")
-        bot = MyBot(command_prefix=get_prefix, intents=intents, help_command=None)
+
+# ---------------------------------------------------------------------------
+# Bot Instance
+# ---------------------------------------------------------------------------
+
+bot = MyBot(command_prefix=get_prefix, intents=intents, help_command=None)
+
 # ---------------------------------------------------------------------------
 # UI Views
 # ---------------------------------------------------------------------------
