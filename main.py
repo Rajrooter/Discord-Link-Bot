@@ -1587,7 +1587,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
     @commands.hybrid_command(name="pendinglinks", description="Review your pending links captured during bursts")
     async def pendinglinks(self, ctx: commands.Context):
         user_id = ctx.author.id
-        if self.rate_limiter.is_limited(user_id, "pendinglinks", cooldown=5. 0):
+        if self.rate_limiter.is_limited(user_id, "pendinglinks", cooldown=5.0):
             remaining = self.rate_limiter. get_remaining(user_id, "pendinglinks", cooldown=5.0)
             await safe_send(ctx, embed=ratelimit_embed(remaining))
             return
