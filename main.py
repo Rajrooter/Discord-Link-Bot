@@ -2,20 +2,16 @@
 """
 Digital Labour - main.py
 
-UX / UI refinements: 
-- Consistent embed builders (titles, emojis, short bullets, footers)
-- Clear CTAs on buttons (Save / Ignore / Summarize / Cancel)
-- Two-line AI verdicts (Keep/Skip + safety word) for link checks
-- Multi-link select flow with clear instructions and safe defaults
-- Summarization flow with progress + structured output template
-- Error/ratelimit messaging with single action/hint
-- CYBERPUNK + TERMINAL THEME for all embeds and responses
+Clean version: 
+- Cyberpunk theme for /help and /cmdinfo commands only
+- Plain text for all other responses
+- All onboarding features removed
+- All syntax errors fixed
 """
 
 import asyncio
 import datetime
 import io
-import json
 import os
 import re
 import time
@@ -54,7 +50,7 @@ if GEMINI_API_KEY and genai is not None:
     ai_client = genai.Client(api_key=GEMINI_API_KEY)
     AI_ENABLED = True and _has_model(ai_client, "gemini-2.0-flash-exp")
     if AI_ENABLED:
-        logger.info("✅ Google Gemini AI enabled")
+        logger. info("✅ Google Gemini AI enabled")
     else:
         logger.warning("⚠️ AI client missing generate_content; AI disabled")
 else:
@@ -72,240 +68,56 @@ except ValueError:
 BATCH_WINDOW_SECONDS = 3
 BATCH_THRESHOLD_DEFAULT = 5
 CONFIRM_TIMEOUT = 4
-AI_PROMPT_LIMIT = 12000  # cap prompt length defensively
+AI_PROMPT_LIMIT = 12000
 
 # Storage files (used by storage module)
 RULES_FILE = "server_rules.txt"
 
 URL_REGEX = r'(? :https?://|www\.)\S+'
-IGNORED_EXTENSIONS = ['.gif', '.png', '.jpg', '.jpeg', '. webp', '.bmp', '.mp4', '.mov', '. avi']
+IGNORED_EXTENSIONS = ['. gif', '.png', '.jpg', '.jpeg', '. webp', '.bmp', '.mp4', '.mov', '.avi']
 
 # Context site provided by user
 COMMUNITY_LEARNING_URL = os.environ.get("COMMUNITY_LEARNING_URL", "https://share.google/yf57dJNzEyAVM0asz")
 
 # ---------------------------------------------------------------------------
-# Cyberpunk Theme Helpers
+# Plain Text Message Helpers (Used everywhere EXCEPT /help and /cmdinfo)
 # ---------------------------------------------------------------------------
 
-def make_cyberpunk_header(title: str, subtitle: str = "") -> str:
-    """Generate cyberpunk ASCII art header"""
-    header = f"""```ansi
-[2;36m╔═══════════════════════════════════════════════╗[0m
-[2;36m║[0m  [1;37m{title[: 40]: ^40}[0m  [2;36m║[0m
-"""
-    if subtitle:
-        header += f"[2;36m║[0m  [2;33m{subtitle[:40]:^40}[0m  [2;36m║[0m\n"
-    header += "[2;36m╚═══════════════════════════════════════════════╝[0m\n```"
-    return header
+def error_message(msg: str) -> str:
+    """Simple error message (no embed)"""
+    return f"⚠️ **Error:** {msg}"
 
 
-def make_status_indicator(status: str) -> str:
-    """Return colored status badge"""
-    badges = {
-        "online": "[1;32m[ONLINE][0m",
-        "ok": "[1;32m[OK][0m",
-        "error": "[1;31m[ERROR][0m",
-        "warning": "[1;33m[! ][0m",
-        "safe": "[1;32m[SAFE][0m",
-        "caution": "[1;33m[CAUTION][0m",
-        "unsafe": "[1;31m[UNSAFE][0m",
-        "processing": "[1;36m[PROCESSING][0m",
-    }
-    return badges. get(status. lower(), f"[1;37m[{status.upper()}][0m")
+def ratelimit_message(wait_s: float) -> str:
+    """Simple cooldown message (no embed)"""
+    return f"⏳ **Slow down!** Please wait {wait_s:. 1f} seconds before using this again."
 
 
-def make_progress_bar(percentage: int, width: int = 20) -> str:
-    """Create ASCII progress bar"""
-    filled = int((percentage / 100) * width)
-    bar = "█" * filled + "░" * (width - filled)
-    return f"[1;32m{bar}[0m [1;37m{percentage}%[0m"
+def verdict_message(link: str, verdict: str, reason: str, author_mention: str = "") -> str:
+    """Simple AI verdict (no embed)"""
+    status = "✅" if "Keep" in verdict else "⚠️"
+    mention_text = f"\n_{author_mention}_" if author_mention else ""
+    return f"{status} **{verdict}**\n{reason}\n\n`{link[: 100]}{'...' if len(link)>100 else ''}`{mention_text}"
+
+
+def multi_link_message(count: int) -> str:
+    """Simple multi-link prompt (no embed)"""
+    return f"📎 **{count} links detected! **\nSelect the links you want to save using the dropdown below."
+
+
+def summarize_progress_message(filename: str) -> str:
+    """Simple progress message (no embed)"""
+    return f"📝 **Summarizing:** {filename}\nPlease wait..."
+
+
+def summarize_result_message(filename: str, body: str, requester: str) -> str:
+    """Simple summary result (no embed)"""
+    return f"📝 **Summary:  {filename}**\n\n{body}\n\n_Summarized for {requester}_"
 
 
 # ---------------------------------------------------------------------------
-# Enhanced Embed / UI helpers
+# Cyberpunk Theme Helpers (ONLY for /help and /cmdinfo commands)
 # ---------------------------------------------------------------------------
-
-def make_embed(
-    title: str,
-    description: str = "",
-    color: discord.Color = discord.Color.blurple(),
-    footer: str = "",
-    fields: Optional[List[Dict[str, str]]] = None,
-) -> discord.Embed:
-    """Enhanced embed builder"""
-    embed = discord.Embed(title=title[: 256], description=description[:4000], color=color)
-    if fields:
-        for f in fields:
-            embed.add_field(
-                name=f. get("name", "")[:256],
-                value=f.get("value", "")[:1024],
-                inline=f.get("inline", False),
-            )
-    if footer:
-        embed.set_footer(text=footer[:2048])
-    embed.timestamp = datetime.datetime.utcnow()
-    return embed
-
-
-def verdict_embed(link: str, verdict_text: str, reason: str, author_mention: str = "") -> discord.Embed:
-    """Enhanced AI verdict with cyberpunk terminal styling"""
-    
-    # Determine color based on verdict
-    if "Keep" in verdict_text or "Safe" in verdict_text:
-        color = 0x00FF9C
-        status = make_status_indicator("safe")
-    elif "Skip" in verdict_text or "Caution" in verdict_text: 
-        color = 0xFF6600
-        status = make_status_indicator("caution")
-    elif "Unsafe" in verdict_text: 
-        color = 0xFF0055
-        status = make_status_indicator("unsafe")
-    else:
-        color = 0x00D9FF
-        status = make_status_indicator("processing")
-    
-    header = """```ansi
-[2;36m╔═══════════════════════════════════════╗[0m
-[2;36m║[0m  [1;37m📎 LINK ANALYSIS COMPLETE[0m           [2;36m║[0m
-[2;36m╚═══════════════════════════════════════╝[0m
-```"""
-    
-    verdict_box = f"""```ansi
-[1;36m┌─[0m [1;37mAI VERDICT[0m [1;36m────────────────────────────┐[0m
-[1;36m│[0m
-[1;36m│[0m {status} [1;37m{verdict_text}[0m
-[1;36m│[0m
-[1;36m│[0m [2;37mReason:[0m [1;37m{reason[: 50]}[0m
-[1;36m│[0m
-[1;36m└────────────────────────────────────────┘[0m
-
-[2;35m>_[0m [2;37mURL:[0m [2;36m{link[: 60]}{'...' if len(link) > 60 else ''}[0m
-```"""
-    
-    footer_text = f"Analyzed for {author_mention}" if author_mention else "Neural analysis complete"
-    
-    return make_embed(
-        title="",
-        description=header + verdict_box,
-        color=color,
-        footer=footer_text,
-    )
-
-
-def multi_link_embed(count: int) -> discord.Embed:
-    """Cyberpunk multi-link selection prompt"""
-    header = make_cyberpunk_header("MULTIPLE LINKS DETECTED", f"{count} URLs found")
-    
-    content = f"""```ansi
-[1;36m>_[0m [1;37mSelect the links you want to save[0m
-[2;36m├─>[0m [2;37mUse the dropdown menu below[0m
-[2;36m├─>[0m [2;37mYou can select multiple links[0m
-[2;36m└─>[0m [2;37mIgnore the rest automatically[0m
-```
-
-**💡 Tip:** Choose only what you need for better organization."""
-    
-    return make_embed(
-        title="",
-        description=header + content,
-        color=0xFFFF00,
-        footer="Batch selection mode active",
-    )
-
-
-def summarize_progress_embed(filename: str) -> discord.Embed:
-    """Terminal-style progress indicator"""
-    header = """```ansi
-[1;35m>_[0m [1;35m[PROCESSING][0m [1;37mDOCUMENT ANALYSIS[0m
-```"""
-    
-    progress = f"""```ansi
-[2;36m┌─[0m [1;37mFILE[0m [2;36m────────────────────────────────┐[0m
-[2;36m│[0m [1;33m{filename[: 35]}[0m
-[2;36m└──────────────────────────────────────┘[0m
-
-[1;36m>_[0m [2;37mExtracting text.. .[0m
-[1;36m>_[0m [2;37mAnalyzing content...[0m
-[1;36m>_[0m [2;37mGenerating summary...[0m
-
-{make_progress_bar(66, 30)}
-```"""
-    
-    return make_embed(
-        title="",
-        description=header + progress,
-        color=0xFF00FF,
-        footer="AI summarization in progress • Please wait",
-    )
-
-
-def summarize_result_embed(filename: str, body: str, requester: str) -> discord.Embed:
-    """Structured summary output with cyberpunk styling"""
-    header = f"""```ansi
-[2;35m╔═══════════════════════════════════════╗[0m
-[2;35m║[0m  [1;37m📝 SUMMARY COMPLETE[0m                 [2;35m║[0m
-[2;35m╚═══════════════════════════════════════╝[0m
-
-[1;36m>_[0m [1;37mFile:[0m [1;33m{filename[:40]}[0m
-```"""
-    
-    summary_content = body[:3500] if len(body) > 3500 else body
-    
-    return make_embed(
-        title="",
-        description=header + f"\n{summary_content}",
-        color=0x00FF9C,
-        footer=f"Summarized for {requester} • AI-powered analysis",
-    )
-
-
-def error_embed(msg: str) -> discord.Embed:
-    """Cyberpunk-styled error message with red alert theme"""
-    header = """```ansi
-[1;31m╔═══════════════════════════════════════╗[0m
-[1;31m║[0m  [1;37m⚠️  SYSTEM ERROR DETECTED[0m          [1;31m║[0m
-[1;31m╚═══════════════════════════════════════╝[0m
-```"""
-    
-    error_content = f"""```ansi
-[2;31m>_[0m [1;31m[ERROR][0m [2;37m{msg[:200]}[0m
-```
-
-**🔧 Action Required:** Check your input and try again."""
-    
-    return make_embed(
-        title="",
-        description=header + error_content,
-        color=0xFF0055,
-        footer="If this persists, contact an administrator",
-    )
-
-
-def ratelimit_embed(wait_s: float) -> discord.Embed:
-    """Cooldown timer with visual progress bar"""
-    header = """```ansi
-[1;33m╔═══════════════════════════════════════╗[0m
-[1;33m║[0m  [1;37m⏳ COOLDOWN ACTIVE[0m                  [1;33m║[0m
-[1;33m╚═══════════════════════════════════════╝[0m
-```"""
-    
-    cooldown_bar = make_progress_bar(int((wait_s / 10) * 100), 25)
-    
-    content = f"""```ansi
-[2;33m>_[0m [1;33m[! ][0m [2;37mPlease wait {wait_s:. 1f} seconds[0m
-
-{cooldown_bar}
-```
-
-**⚡ Tip:** This prevents spam and keeps the bot responsive."""
-    
-    return make_embed(
-        title="",
-        description=header + content,
-        color=0xFF6600,
-        footer="Rate limit protection active",
-    )
-
 
 def make_cyberpunk_help_embed() -> discord.Embed:
     """Full cyberpunk + terminal themed help embed"""
@@ -316,7 +128,7 @@ def make_cyberpunk_help_embed() -> discord.Embed:
 [2;36m╔═══════════════════════════════════════════════╗[0m
 [2;35m║[0m  [1;36m▓█████▄  ██▓  ▄████  ██▓▄▄▄█████▓ ▄▄▄       ██▓    [0m [2;35m║[0m
 [2;35m║[0m  [1;36m▒██▀ ██▌▓██▒ ██▒ ▀█▒▓██▒▓  ██▒ ▓▒▒████▄    ▓██▒    [0m [2;35m║[0m
-[2;35m║[0m  [1;35m░██   █▌▒██▒▒██░▄▄▄░▒██▒▒ ▓██░ ▒░▒█��  ▀█▄  ▒██░    [0m [2;35m║[0m
+[2;35m║[0m  [1;35m░██   █▌▒██▒▒██░▄▄▄░▒██▒▒ ▓██░ ▒░▒██▄▀█▄  ▒██░    [0m [2;35m║[0m
 [2;35m║[0m  [1;35m░▓█▄   ▌░██░░▓█  ██▓░██░░ ▓██▓ ░ ░██▄▄▄▄██ ▒██░    [0m [2;35m║[0m
 [2;35m║[0m  [1;33m░▒████▓ ░██░░▒▓███▀▒░██░  ▒██▒ ░  ▓█   ▓██▒░██████▒[0m [2;35m║[0m
 [2;35m║[0m  [1;33m ▒▒▓  ▒ ░▓   ░▒   ▒ ░▓    ▒ ░░    ▒▒   ▓▒█░░ ▒░▓  ░[0m [2;35m║[0m
@@ -346,7 +158,7 @@ def make_cyberpunk_help_embed() -> discord.Embed:
 [1;32m│ ▸[0m [1;33m/deletelink[0m [2;35m<number>[0m
 [1;36m│   └─>[0m Remove link by index number
 [1;36m│[0m
-[1;36m└───────────────────────────────────────────────┘[0m
+[1;36m└───────────────────────────────��───────────────┘[0m
 ```"""
     
     embed.add_field(name="\u200b", value=link_commands, inline=False)
@@ -396,7 +208,7 @@ def make_cyberpunk_help_embed() -> discord.Embed:
 [2;36m│[0m
 [1;32m│ ◆[0m [1;37mAuto Link Detection[0m [2;33m// Captures URLs automatically[0m
 [1;32m│ ◆[0m [1;37mAI Safety Check[0m [2;33m// Evaluates relevance & safety[0m
-[1;32m│ ◆[0m [1;37mDocument Summarization[0m [2;33m// . txt/.pdf/. docx support[0m
+[1;32m│ ◆[0m [1;37mDocument Summarization[0m [2;33m// . txt/. pdf/. docx support[0m
 [1;32m│ ◆[0m [1;37mBurst Protection[0m [2;33m// Queues links during spam[0m
 [1;32m│ ◆[0m [1;37mSmart Categorization[0m [2;33m// Organize by topics[0m
 [2;36m│[0m
@@ -463,7 +275,7 @@ async def safe_send(target, content=None, embed=None, ephemeral=False, view=None
         if hasattr(target, "send"):
             return await target.send(content=content, embed=embed, view=view)
         if hasattr(target, "response"):
-            return await target.response.send_message(content=content, embed=embed, ephemeral=ephemeral, view=view)
+            return await target.response. send_message(content=content, embed=embed, ephemeral=ephemeral, view=view)
         if hasattr(target, "followup"):
             return await target. followup.send(content=content, embed=embed, ephemeral=ephemeral, view=view)
     except Exception as e:
@@ -476,9 +288,9 @@ async def safe_send(target, content=None, embed=None, ephemeral=False, view=None
 # ---------------------------------------------------------------------------
 class GuildConfig:
     def __init__(self):
-        self._mem = {}  # {guild_id: {"auto_delete_seconds": int, "batch_threshold": int}}
+        self._mem = {}
 
-    def load(self, guild_id:  Optional[int]) -> Dict[str, int]:
+    def load(self, guild_id: Optional[int]) -> Dict[str, int]:
         if not guild_id:
             return {}
         try:
@@ -544,7 +356,6 @@ async def ai_call(prompt: str, max_retries: int = 3, timeout: float = 18.0) -> s
 
 
 async def get_ai_guidance(url: str) -> str:
-    # Two-line, strict format
     prompt = f"""Evaluate this URL for study purposes and safety in exactly 2 lines: 
 
 URL: {url}
@@ -610,13 +421,13 @@ async def ai_avatar_advice(desired_tone: str = "friendly") -> str:
     return await ai_call(prompt, max_retries=2, timeout=12.0)
 
 
-async def ai_channel_suggestions(guild: discord.Guild, focus:  str = "study & career") -> str:
+async def ai_channel_suggestions(guild: discord.Guild, focus: str = "study & career") -> str:
     try:
         sample = []
         for c in guild.categories[: 8]: 
-            sample.append(f"{c.name}: {', '.join([ch.name for ch in c.channels][: 6])}")
+            sample.append(f"{c.name}:  {', '.join([ch.name for ch in c.channels][: 6])}")
         uncategorized = [ch. name for ch in guild.channels if not getattr(ch, "category", None)]
-        if uncategorized:
+        if uncategorized: 
             sample.append("Uncat: " + ", ".join(uncategorized[: 6]))
         server_sample = " | ".join(sample[: 10]) or "No sample"
     except Exception:
@@ -655,24 +466,24 @@ def extract_text_from_bytes(filename: str, data: bytes) -> Optional[str]:
                 return data.decode("latin-1", errors="replace")
         if name.endswith(".pdf"):
             try:
-                from PyPDF2 import PdfReader  # type: ignore
+                from PyPDF2 import PdfReader
                 with io.BytesIO(data) as bio:
                     reader = PdfReader(bio)
                     pages = []
                     for p in reader.pages:
                         pages.append(p.extract_text() or "")
-                    return "\n". join(pages)
+                    return "\n".join(pages)
             except Exception as e:
                 logger.debug(f"PDF extraction error: {e}")
                 return None
         if name.endswith(". docx"):
             try:
-                import docx  # type: ignore
+                import docx
                 with io.BytesIO(data) as bio:
                     doc = docx.Document(bio)
                     return "\n".join(p.text for p in doc.paragraphs)
             except Exception as e:
-                logger.debug(f"DOCX extraction error: {e}")
+                logger.debug(f"DOCX extraction error:  {e}")
                 return None
     except Exception as e:
         logger.debug(f"extract_text_from_bytes error: {e}")
@@ -724,12 +535,12 @@ def load_rules() -> str:
 
 intents = discord.Intents. default()
 intents.message_content = True
-intents. reactions = True
+intents.reactions = True
 intents.members = True
 
 
 def get_prefix(bot, message):
-    prefixes = ["!"]
+    prefixes = ["! "]
     return commands.when_mentioned_or(*prefixes)(bot, message)
 
 
@@ -744,11 +555,11 @@ class MyBot(commands.Bot):
             global_synced = await self.tree.sync()
             synced_commands. extend(global_synced)
             logger.info(f"✅ Synced {len(global_synced)} commands globally")
-        except Exception as e:
+        except Exception as e: 
             logger.error(f"Global sync failed: {e}")
 
         test_guild_id = os.environ.get("TEST_GUILD_ID")
-        if test_guild_id:
+        if test_guild_id: 
             try:
                 guild_id = int(test_guild_id)
                 guild = discord.Object(id=guild_id)
@@ -756,12 +567,15 @@ class MyBot(commands.Bot):
                 guild_synced = await self.tree.sync(guild=guild)
                 logger.info(f"✅ Synced {len(guild_synced)} commands to test guild {guild_id}")
             except Exception as e:
-                logger.error(f"Test guild sync failed: {e}")
+                logger.error(f"Test guild sync failed:  {e}")
 
         logger.info(f"✅ Total commands synced: {len(synced_commands)}")
-        bot = MyBot(command_prefix=get_prefix, intents=intents, help_command=None)
+
+# Bot instantiation
+bot = MyBot(command_prefix=get_prefix, intents=intents, help_command=None)
+
 # ---------------------------------------------------------------------------
-# UI Views
+# UI Views (All updated to use plain text instead of embeds)
 # ---------------------------------------------------------------------------
 
 class SummarizeView(discord.ui.View):
@@ -776,30 +590,30 @@ class SummarizeView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.author_id:
-            await safe_send(interaction. response, embed=error_embed("Only the uploader can request summarization. "), ephemeral=True)
+            await safe_send(interaction. response, content=error_message("Only the uploader can request summarization."), ephemeral=True)
             return False
         return True
 
-    @discord.ui.button(label="Summarize", style=discord.ButtonStyle.green, emoji="📝")
+    @discord.ui.button(label="Summarize", style=discord. ButtonStyle.green, emoji="📝")
     async def summarize_button(self, interaction: discord. Interaction, button: discord.ui.Button):
         try:
             await interaction.response.defer()
             data = await download_bytes(self. file_url)
             if not data:
-                await safe_send(interaction.followup, embed=error_embed("Failed to download the file."), ephemeral=True)
+                await safe_send(interaction.followup, content=error_message("Failed to download the file."), ephemeral=True)
                 return
-            progress = await safe_send(interaction.followup, embed=summarize_progress_embed(self.filename), ephemeral=True)
+            progress = await safe_send(interaction.followup, content=summarize_progress_message(self.filename), ephemeral=True)
             summary = await summarize_document_bytes(self.filename, data, context_note=self.context_note)
-            embed = summarize_result_embed(self.filename, summary[: 3800], interaction.user.mention)
-            await safe_send(interaction.channel, embed=embed)
+            result_msg = summarize_result_message(self.filename, summary[: 3500], interaction.user.mention)
+            await safe_send(interaction.channel, content=result_msg)
             if progress and hasattr(progress, "edit"):
                 try:
-                    await progress.edit(content=None, embed=make_embed("✅ Done", "Summary posted.", discord.Color.green()))
+                    await progress.edit(content="✅ **Done** - Summary posted.")
                 except Exception: 
                     pass
         except Exception as e:
             logger.error(f"Summarize button failed: {e}")
-            await safe_send(interaction.followup, embed=error_embed("Summarization failed.  Please try again."), ephemeral=True)
+            await safe_send(interaction.followup, content=error_message("Summarization failed. Please try again. "), ephemeral=True)
         finally:
             for child in self.children:
                 child.disabled = True
@@ -809,12 +623,12 @@ class SummarizeView(discord.ui.View):
                 pass
 
     @discord.ui. button(label="Cancel", style=discord.ButtonStyle. secondary, emoji="❌")
-    async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def cancel_button(self, interaction: discord. Interaction, button: discord.ui.Button):
         await safe_send(interaction.response, content="Cancelled summarization.", ephemeral=True)
         for child in self.children:
             child.disabled = True
         try:
-            await interaction.message.edit(view=self)
+            await interaction.message. edit(view=self)
         except Exception:
             pass
 
@@ -830,7 +644,7 @@ class DisclaimerView(discord.ui. View):
 
     async def interaction_check(self, interaction):
         if interaction.user.id != self.author_id:
-            await safe_send(interaction. response, embed=error_embed("This is not for you."), ephemeral=True)
+            await safe_send(interaction. response, content=error_message("This is not for you."), ephemeral=True)
             return False
         return True
 
@@ -842,9 +656,8 @@ class DisclaimerView(discord.ui. View):
         except Exception:
             pass
         links_data = [{"url": link} for link in self.links]
-        embed = multi_link_embed(len(self.links))
-        selection_view = MultiLinkSelectView(links_data, self. author_id, self.original_message, self.cog)
-        prompt_msg = await safe_send(interaction.channel, embed=embed, view=selection_view)
+        selection_view = MultiLinkSelectView(links_data, self.author_id, self.original_message, self.cog)
+        prompt_msg = await safe_send(interaction.channel, content=multi_link_message(len(self.links)), view=selection_view)
         if prompt_msg:
             selection_view.message = prompt_msg
 
@@ -870,7 +683,7 @@ class LinkActionView(discord.ui.View):
 
     async def interaction_check(self, interaction):
         if interaction.user. id != self.author_id:
-            await safe_send(interaction.response, embed=error_embed("This button is not for you."), ephemeral=True)
+            await safe_send(interaction.response, content=error_message("This button is not for you."), ephemeral=True)
             return False
         return True
 
@@ -878,14 +691,14 @@ class LinkActionView(discord.ui.View):
     async def save_button(self, interaction, button):
         try:
             await asyncio.to_thread(storage.delete_pending_link_by_id, self.pending_db_id)
-            if interaction.message. id in self.cog.pending_links:
+            if interaction.message.id in self.cog.pending_links:
                 del self.cog.pending_links[interaction.message.id]
-            self.cog.links_to_categorize[self.author_id] = {"link": self.link, "message":  self.original_message}
+            self.cog.links_to_categorize[self.author_id] = {"link": self.link, "message": self.original_message}
             prefix = await self.cog._get_preferred_prefix(self.original_message) if self.original_message else "!"
             await safe_send(interaction.response, content=f"✅ Link marked for saving!  Use `{prefix}category <name>` to finalize.", ephemeral=True)
         except Exception as e: 
             logger.error(f"Save failed: {e}")
-            await safe_send(interaction.response, embed=error_embed("Failed to mark link for saving.  Please try again."), ephemeral=True)
+            await safe_send(interaction.response, content=error_message("Failed to mark link for saving.  Please try again."), ephemeral=True)
         finally:
             for child in self.children:
                 child. disabled = True
@@ -910,7 +723,7 @@ class MultiLinkSelectView(discord.ui.View):
         self.links = links
         self.author_id = author_id
         self.original_message = original_message
-        self.cog = cog
+        self. cog = cog
         self.selected_links = []
         self. message = None
         options = []
@@ -934,9 +747,9 @@ class MultiLinkSelectView(discord.ui.View):
 
     async def interaction_check(self, interaction):
         if interaction.user. id != self.author_id:
-            await safe_send(interaction.response, embed=error_embed("Not your selection."), ephemeral=True)
+            await safe_send(interaction.response, content=error_message("Not your selection."), ephemeral=True)
             return False
-        if interaction.data. get("custom_id") == "link_selector":
+        if interaction.data.get("custom_id") == "link_selector":
             values = interaction.data.get("values", [])
             self.selected_links = [int(v) for v in values]
             await interaction.response.defer()
@@ -997,7 +810,7 @@ class ConfirmMultiLinkView(discord.ui.View):
                 )
             except Exception as e:
                 logger.error(f"Error saving link {idx}: {e}")
-                await safe_send(interaction.channel, embed=error_embed("Failed to save one of the links. Please try again."))
+                await safe_send(interaction.channel, content=error_message("Failed to save one of the links. Please try again."))
         for child in self.children:
             child.disabled = True
         try:
@@ -1048,8 +861,8 @@ class ConfirmDeleteView(discord.ui.View):
                 del self.cog.pending_links[self.bot_msg_id]
             await safe_send(interaction.response, content="🗑️ Link deleted.", ephemeral=True)
         except Exception as e:
-            logger.error(f"Confirm delete failed: {e}")
-            await safe_send(interaction. response, embed=error_embed("Could not delete link. Please try again."), ephemeral=True)
+            logger. error(f"Confirm delete failed: {e}")
+            await safe_send(interaction. response, content=error_message("Could not delete link. Please try again."), ephemeral=True)
         finally:
             for child in self.children:
                 child.disabled = True
@@ -1064,22 +877,22 @@ class ConfirmDeleteView(discord.ui.View):
         for child in self.children:
             child.disabled = True
         try:
-            await interaction.message. edit(view=self)
+            await interaction.message.edit(view=self)
         except Exception:
             pass
 
 
 class ConfirmYesNoView(discord.ui.View):
     """Button-based confirmation to replace reactions for reliability."""
-    def __init__(self, author_id: int, on_confirm: Callable[[], Awaitable[None]], prompt: str = "Are you sure?", timeout:  int = 60):
+    def __init__(self, author_id: int, on_confirm: Callable[[], Awaitable[None]], prompt: str = "Are you sure?", timeout: int = 60):
         super().__init__(timeout=timeout)
         self.author_id = author_id
-        self.on_confirm = on_confirm
+        self. on_confirm = on_confirm
         self.prompt = prompt
 
     async def interaction_check(self, interaction:  discord.Interaction) -> bool:
         if interaction.user.id != self.author_id:
-            await safe_send(interaction. response, embed=error_embed("Not for you."), ephemeral=True)
+            await safe_send(interaction. response, content=error_message("Not for you."), ephemeral=True)
             return False
         return True
 
@@ -1091,7 +904,7 @@ class ConfirmYesNoView(discord.ui.View):
             await safe_send(interaction.followup, content="✅ Done.", ephemeral=True)
         except Exception as e:
             logger.error(f"ConfirmYesNoView error: {e}")
-            await safe_send(interaction.followup, embed=error_embed("Failed to complete action. "), ephemeral=True)
+            await safe_send(interaction.followup, content=error_message("Failed to complete action. "), ephemeral=True)
         finally:
             for child in self.children:
                 child. disabled = True
@@ -1111,7 +924,7 @@ class ConfirmYesNoView(discord.ui.View):
             pass
 
 # ---------------------------------------------------------------------------
-# Cog implementation
+# Cog implementation (ALL ONBOARDING CODE REMOVED)
 # ---------------------------------------------------------------------------
 
 class LinkManagerCog(commands.Cog, name="LinkManager"):
@@ -1133,21 +946,6 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
         if len(self.processed_messages) > max_size:
             self. processed_messages = set(list(self.processed_messages)[-max_size:])
 
-    async def ensure_roles_exist(self):
-        guild = None
-        for g in self.bot.guilds:
-            guild = g
-            break
-        if not guild:
-            return
-        required_roles = ["Male", "Female", "Other", "Data Science", "IT", "Other Department", "1st Year", "2nd Year", "3rd Year", "4th Year", "Graduate"]
-        for role_name in required_roles:
-            if not discord.utils.get(guild. roles, name=role_name):
-                try:
-                    await guild.create_role(name=role_name)
-                except Exception as e:
-                    logger. debug(f"Failed to create role {role_name}: {e}")
-
     async def cleanup_old_channel_events(self):
         while True:
             try:
@@ -1168,7 +966,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                     prefix = maybe
             else:
                 prefix = cp
-        except Exception: 
+        except Exception:
             prefix = "!"
         if isinstance(prefix, (list, tuple)):
             for p in prefix:
@@ -1181,7 +979,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
         gid = original_message.guild.id if original_message and original_message.guild else None
         per_guild_delay = guild_config.get_value(gid, "auto_delete_seconds", AUTO_DELETE_SECONDS_DEFAULT)
         delay = delay if delay is not None else per_guild_delay
-        if not AUTO_DELETE_ENABLED: 
+        if not AUTO_DELETE_ENABLED:
             return
         await asyncio.sleep(delay)
         try:
@@ -1203,9 +1001,9 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
 
     async def _handle_mention_query(self, message: discord.Message) -> bool:
         user_id = message.author.id
-        if self.rate_limiter.is_limited(user_id, "ai_mention", cooldown=8.0):
+        if self.rate_limiter.is_limited(user_id, "ai_mention", cooldown=8. 0):
             remaining = self.rate_limiter. get_remaining(user_id, "ai_mention", cooldown=8.0)
-            await safe_send(message. channel, embed=ratelimit_embed(remaining))
+            await safe_send(message.channel, content=ratelimit_message(remaining))
             return True
 
         content = (message.content or "").strip()
@@ -1226,19 +1024,14 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                         else:
                             async for m in ch.history(limit=50):
                                 if m.content and len(m.content) > 40 and not m.author.bot:
-                                    rules_text = m. content
+                                    rules_text = m.content
                                     break
                     except Exception:
                         rules_text = None
             if not rules_text:
                 rules_text = load_rules()
-            embed = make_embed(
-                title="📒 Server Rules",
-                description="\n".join(rules_text. splitlines()[:15])[: 1900] or "Rules not found.",
-                color=discord.Color. blue(),
-                footer="Mention me with 'improve rules' to get AI suggestions."
-            )
-            await safe_send(message.channel, embed=embed)
+            response = f"📒 **Server Rules**\n\n{rules_text[: 1800]}\n\n_Mention me with 'improve rules' to get AI suggestions._"
+            await safe_send(message.channel, content=response)
             return True
 
         if ("improv" in text or "suggest" in text or "review" in text) and ("#" in message.content or "channel" in text):
@@ -1256,7 +1049,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                         channel_asked = ch
                         break
             if channel_asked:
-                try: 
+                try:
                     pinned = []
                     if isinstance(channel_asked, discord.TextChannel):
                         pinned = await channel_asked.pins()
@@ -1270,14 +1063,14 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                                     break
                 except Exception: 
                     rules_text = None
-            if not rules_text: 
+            if not rules_text:
                 rules_text = load_rules()
             server_summary = f"{message.guild.name} — members: {message.guild.member_count}" if message.guild else ""
             await message.channel.trigger_typing()
             ai_response = await ai_improve_rules(rules_text or "No content found", server_summary)
             preview = "\n".join(ai_response. splitlines()[:8])
-            await safe_send(message.channel, embed=make_embed("🧠 AI:  Improvements", preview[: 1500], discord.Color.teal()))
-            for chunk in (ai_response[i:i+1900] for i in range(0, len(ai_response), 1900)):
+            await safe_send(message.channel, content=f"🧠 **AI:  Improvements**\n\n{preview[: 1500]}")
+            for chunk in (ai_response[i: i+1900] for i in range(0, len(ai_response), 1900)):
                 await safe_send(message.channel, content=chunk)
             self.rate_limiter.register(user_id, "ai_mention")
             return True
@@ -1286,9 +1079,9 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
             extra_ctx = f"User question: {content. strip()}\nWebsite: {COMMUNITY_LEARNING_URL}\nAudience: rural students"
             await message.channel.trigger_typing()
             ai_response = await ai_server_audit(message.guild, topic="career guidance for students", extra_context=extra_ctx)
-            preview = "\n". join(ai_response. splitlines()[:6])
-            await safe_send(message.channel, embed=make_embed("🎯 AI:  Career Guidance", preview[: 1500], discord.Color.dark_gold()))
-            for chunk in (ai_response[i:i+1900] for i in range(0, len(ai_response), 1900)):
+            preview = "\n". join(ai_response.splitlines()[:6])
+            await safe_send(message.channel, content=f"🎯 **AI: Career Guidance**\n\n{preview[: 1500]}")
+            for chunk in (ai_response[i: i+1900] for i in range(0, len(ai_response), 1900)):
                 await safe_send(message.channel, content=chunk)
             self.rate_limiter.register(user_id, "ai_mention")
             return True
@@ -1299,9 +1092,9 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                 "join channels, read pinned messages, use reactions, use slash commands, ask for help.  Add 3 safety tips."
             )
             ai_response = await ai_call(teacher_prompt, max_retries=2, timeout=12.0)
-            await safe_send(message.channel, embed=make_embed("📘 Learning Discord (simple)", "\n".join(ai_response. splitlines()[:10])[:1500], discord.Color.green()))
+            await safe_send(message.channel, content=f"📘 **Learning Discord (simple)**\n\n{ai_response[:1500]}")
             for chunk in (ai_response[i:i+1900] for i in range(0, len(ai_response), 1900)):
-                await safe_send(message.channel, content=chunk)
+                await safe_send(message. channel, content=chunk)
             self.rate_limiter.register(user_id, "ai_mention")
             return True
 
@@ -1311,23 +1104,23 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
             if m:
                 tone = m.group(1).strip()
             ai_response = await ai_avatar_advice(desired_tone=tone)
-            await safe_send(message.channel, embed=make_embed("🖼️ Avatar suggestions", "\n".join(ai_response.splitlines()[:8])[:1500], discord.Color.purple()))
+            await safe_send(message.channel, content=f"🖼️ **Avatar suggestions**\n\n{ai_response[:1500]}")
             for chunk in (ai_response[i:i+1900] for i in range(0, len(ai_response), 1900)):
                 await safe_send(message.channel, content=chunk)
-            self.rate_limiter.register(user_id, "ai_mention")
+            self.rate_limiter. register(user_id, "ai_mention")
             return True
 
         if "what more channels" in text or "channels to create" in text or "suggest channels" in text:
             suggestions = await ai_channel_suggestions(message.guild, focus="study, career, low-resource teaching")
-            await safe_send(message.channel, embed=make_embed("📂 Channel suggestions", "\n".join(suggestions.splitlines()[:8])[:1500], discord.Color.gold()))
+            await safe_send(message.channel, content=f"📂 **Channel suggestions**\n\n{suggestions[:1500]}")
             for chunk in (suggestions[i:i+1900] for i in range(0, len(suggestions), 1900)):
-                await safe_send(message. channel, content=chunk)
+                await safe_send(message.channel, content=chunk)
             self.rate_limiter.register(user_id, "ai_mention")
             return True
 
         if "prefix" in text or "command prefix" in text: 
             prefix = await self._get_preferred_prefix(message)
-            await safe_send(message.channel, content=f"👋 My active command prefix is `{prefix}` — you can also use slash (/) commands.")
+            await safe_send(message. channel, content=f"👋 My active command prefix is `{prefix}` — you can also use slash (/) commands.")
             return True
 
         return False
@@ -1339,7 +1132,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
         self.processed_messages.add(message.id)
         self.prune_processed()
 
-        await self.bot.process_commands(message)
+        await self. bot.process_commands(message)
 
         try:
             if self.bot.user in message.mentions:
@@ -1347,16 +1140,8 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                 if handled:
                     return
                 prefix = await self._get_preferred_prefix(message)
-                embed = make_embed(
-                    title="👋 Welcome to Digital Labour",
-                    description=(
-                        "I help save links, summarize docs, and guide students.\n"
-                        f"Prefix: `{prefix}` or use slash commands.\n"
-                        "Try:  drop a link or type `/help`."
-                    ),
-                    color=discord.Color.blurple(),
-                )
-                await safe_send(message. channel, embed=embed)
+                welcome = f"👋 **Welcome to Digital Labour**\n\nI help save links, summarize docs, and guide students.\nPrefix: `{prefix}` or use slash commands.\nTry:  drop a link or type `/help`."
+                await safe_send(message.channel, content=welcome)
                 return
         except Exception: 
             logger.debug("mention handler error", exc_info=True)
@@ -1365,7 +1150,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
             file_candidates = []
             for att in message.attachments:
                 fn = att.filename. lower()
-                if fn.endswith((".txt", ".pdf", ".docx")):
+                if fn.endswith((". txt", ".pdf", ".docx")):
                     file_candidates. append((att. url, att.filename))
             for m in re.finditer(URL_REGEX, message.content or ""):
                 url = m.group(0)
@@ -1374,58 +1159,13 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
             if file_candidates:
                 for url, filename in file_candidates: 
                     view = SummarizeView(file_url=url, filename=filename, author_id=message.author.id, context_note=f"Uploaded in #{message.channel.name} by {message.author.display_name}", cog=self)
-                    prompt_msg = await safe_send(message.channel, embed=make_embed("📝 Document detected", f"{message.author.mention}, click to summarize **{filename}**.", discord.Color.blurple()), view=view)
+                    prompt_msg = await safe_send(message.channel, content=f"📝 **Document detected**\n\n{message.author.mention}, click to summarize **{filename}**.", view=view)
                     if prompt_msg:
                         view.message = prompt_msg
         except Exception:
             logger.debug("file summarize trigger error", exc_info=True)
 
-        onboarding_data = storage.load_onboarding_data()
-        user_id = str(message.author.id)
-        if user_id in onboarding_data:
-            user_data = onboarding_data[user_id]
-            if user_data.get("state") == "college":
-                user_data["data"]["college"] = message.content
-                user_data["state"] = "referral"
-                embed = make_embed(
-                    title="Onboarding - Referral",
-                    description="Who referred you to this server? (Type a name or 'None')",
-                    color=discord. Color.green()
-                )
-                msg = await safe_send(message. channel, embed=embed)
-                user_data["message_id"] = msg.id if msg else 0
-                onboarding_data[user_id] = user_data
-                storage.save_onboarding_data(onboarding_data)
-                try:
-                    await message.delete()
-                except Exception:
-                    pass
-                return
-            elif user_data.get("state") == "referral":
-                user_data["data"]["referral"] = message.content
-                user_data["state"] = "confirm"
-                embed = make_embed(title="Please Confirm Your Information", color=discord.Color.blue())
-                embed.add_field(name="Gender", value=user_data["data"]["gender"], inline=True)
-                embed.add_field(name="Department", value=user_data["data"]["department"], inline=True)
-                embed.add_field(name="Year", value=user_data["data"]["year"], inline=True)
-                embed.add_field(name="College", value=user_data["data"]["college"], inline=True)
-                embed.add_field(name="Referral", value=user_data["data"]["referral"], inline=True)
-                embed.set_footer(text="React with ✅ to confirm or ❌ to start over")
-                msg = await safe_send(message.channel, embed=embed)
-                if msg:
-                    try:
-                        await msg.add_reaction('✅')
-                        await msg.add_reaction('❌')
-                    except Exception: 
-                        pass
-                    user_data["message_id"] = msg.id
-                onboarding_data[user_id] = user_data
-                storage.save_onboarding_data(onboarding_data)
-                try:
-                    await message.delete()
-                except Exception:
-                    pass
-                return
+        # ONBOARDING CODE REMOVED - No more role assignment or onboarding flows
 
         try:
             urls = [m.group(0) for m in re.finditer(URL_REGEX, message.content or "")]
@@ -1436,7 +1176,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
             non_media_links = [link for link in urls if not is_media_url(link) and is_valid_url(link)]
             if len(non_media_links) > 1:
                 if len(non_media_links) > 25:
-                    await safe_send(message.channel, embed=make_embed("📎 Many links detected", f"Found {len(non_media_links)} links. Processing in batches.  Use `!pendinglinks` to review.", discord.Color.gold()))
+                    await safe_send(message.channel, content=f"📎 **Many links detected! **\n\nFound {len(non_media_links)} links. Processing in batches.  Use `! pendinglinks` to review.")
                     dropdown_links = non_media_links[:25]
                     remaining = non_media_links[25:]
                     for link in remaining:
@@ -1448,16 +1188,15 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                                 "original_message_id": message.id,
                                 "timestamp": datetime.datetime.utcnow().isoformat()
                             }
-                            pending_id = await asyncio.to_thread(storage.add_pending_link, pending_entry)
-                            self.pending_batches.setdefault(message.author.id, []).append({"link": link, "original_message":  message, "timestamp": time.time(), "pending_db_id": pending_id})
+                            pending_id = await asyncio.to_thread(storage. add_pending_link, pending_entry)
+                            self.pending_batches. setdefault(message.author.id, []).append({"link": link, "original_message":  message, "timestamp": time.time(), "pending_db_id": pending_id})
                         except Exception as e:
                             logger.error(f"Failed to queue link (batch overflow): {e}")
-                            await safe_send(message.channel, embed=error_embed("Failed to queue one of the links. Please try again. "))
+                            await safe_send(message.channel, content=error_message("Failed to queue one of the links. Please try again."))
                 else:
                     dropdown_links = non_media_links
-                disclaimer_embed = multi_link_embed(len(non_media_links))
                 disclaimer_view = DisclaimerView(dropdown_links, message.author.id, message, self)
-                disclaimer_msg = await safe_send(message.channel, embed=disclaimer_embed, view=disclaimer_view)
+                disclaimer_msg = await safe_send(message. channel, content=multi_link_message(len(non_media_links)), view=disclaimer_view)
                 if disclaimer_msg:
                     disclaimer_view.message = disclaimer_msg
                 return
@@ -1469,26 +1208,26 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                 self.event_cleanup.cleanup_old_events(ch_id, BATCH_WINDOW_SECONDS)
                 event_count = self.event_cleanup.get_event_count(ch_id, BATCH_WINDOW_SECONDS)
                 gid = message.guild.id if message.guild else None
-                per_guild_threshold = guild_config. get_value(gid, "batch_threshold", BATCH_THRESHOLD_DEFAULT)
+                per_guild_threshold = guild_config.get_value(gid, "batch_threshold", BATCH_THRESHOLD_DEFAULT)
                 if event_count > per_guild_threshold:
                     try:
                         pending_entry = {
-                            "user_id": message.author.id,
-                            "link": link,
+                            "user_id": message.author. id,
+                            "link":  link,
                             "channel_id": message.channel.id,
                             "original_message_id": message.id,
-                            "timestamp": datetime.datetime.utcnow().isoformat()
+                            "timestamp": datetime.datetime. utcnow().isoformat()
                         }
-                        pending_id = await asyncio.to_thread(storage.add_pending_link, pending_entry)
-                        self.pending_batches.setdefault(message.author.id, []).append({"link": link, "original_message": message, "timestamp":  now, "pending_db_id":  pending_id})
+                        pending_id = await asyncio. to_thread(storage.add_pending_link, pending_entry)
+                        self.pending_batches.setdefault(message. author.id, []).append({"link": link, "original_message": message, "timestamp": now, "pending_db_id":  pending_id})
                         try:
                             await message.add_reaction("🗂️")
-                        except Exception: 
+                        except Exception:  
                             pass
                         continue
-                    except Exception as e: 
+                    except Exception as e:  
                         logger.error(f"Failed to queue link (burst): {e}")
-                        await safe_send(message.channel, embed=error_embed("Failed to queue this link. Please try again."))
+                        await safe_send(message.channel, content=error_message("Failed to queue this link. Please try again."))
                         continue
                 try:
                     pending_entry = {
@@ -1503,9 +1242,9 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                     lines = guidance.splitlines()
                     verdict_line = lines[0] if lines else "Keep/Skip"
                     reason_line = lines[1] if len(lines) > 1 else "No reason provided."
-                    embed = verdict_embed(link, verdict_line, reason_line, author_mention=message.author.mention)
+                    verdict_msg = verdict_message(link, verdict_line, reason_line, author_mention=message.author.mention)
                     view = LinkActionView(link, message.author. id, message, pending_id, self, ai_verdict=guidance)
-                    ask_msg = await safe_send(message.channel, embed=embed, view=view)
+                    ask_msg = await safe_send(message.channel, content=verdict_msg, view=view)
                     if pending_id:
                         try:
                             await asyncio.to_thread(storage. update_pending_with_bot_msg_id, pending_id, getattr(ask_msg, "id", None))
@@ -1514,20 +1253,20 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                     self.pending_links[getattr(ask_msg, "id", None)] = {"link": link, "author_id": message.author.id, "original_message": message, "pending_db_id": pending_id}
                     try:
                         asyncio.create_task(self._delete_if_no_response(ask_msg, message, pending_id))
-                    except Exception: 
+                    except Exception:  
                         pass
                 except Exception as e:
-                    logger. error(f"Failed to process link: {e}")
-                    await safe_send(message.channel, embed=error_embed("Failed to handle this link. Please try again."))
+                    logger.error(f"Failed to process link: {e}")
+                    await safe_send(message.channel, content=error_message("Failed to handle this link. Please try again."))
 
     # ---------------------------------------------------------------------
-    # Hybrid commands
+    # Hybrid commands (ONLY help and cmdinfo use embeds, rest use plain text)
     # ---------------------------------------------------------------------
 
     @commands.hybrid_command(name="help", description="Display full command reference with cyberpunk UI")
     async def show_help(self, ctx: commands.Context, compact: bool = False):
         """Enhanced help command with cyberpunk aesthetics"""
-        if compact: 
+        if compact:  
             embed = make_compact_help_embed()
         else:
             embed = make_cyberpunk_help_embed()
@@ -1560,7 +1299,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
         cmd = cmd_details.get(command_name.lower())
         
         if not cmd:
-            await safe_send(ctx, embed=error_embed(f"Command '{command_name}' not found.  Use `/help` for full list."))
+            await safe_send(ctx, content=error_message(f"Command '{command_name}' not found.  Use `/help` for full list."))
             return
         
         header = f"""```ansi
@@ -1569,7 +1308,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
         
         embed = discord.Embed(
             title="",
-            description=header + f"\n**{cmd.get('desc', 'No description')}**",
+            description=header + f"\n**{cmd. get('desc', 'No description')}**",
             color=cmd.get('color', 0x00D9FF)
         )
         
@@ -1589,7 +1328,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
         user_id = ctx.author.id
         if self.rate_limiter.is_limited(user_id, "pendinglinks", cooldown=5.0):
             remaining = self.rate_limiter. get_remaining(user_id, "pendinglinks", cooldown=5.0)
-            await safe_send(ctx, embed=ratelimit_embed(remaining))
+            await safe_send(ctx, content=ratelimit_message(remaining))
             return
         if user_id in self.pendinglinks_in_progress:
             await safe_send(ctx, content=f"{ctx.author.mention}, you have a pending review in progress.")
@@ -1600,7 +1339,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                 pending_from_db = await asyncio.to_thread(storage. get_pending_links_for_user, user_id)
             except Exception as e:
                 logger.error(f"pendinglinks fetch failed: {e}")
-                await safe_send(ctx, embed=error_embed("Could not load pending links right now. Please try again. "))
+                await safe_send(ctx, content=error_message("Could not load pending links right now. Please try again. "))
                 return
             batch = self.pending_batches.get(user_id, [])
             if not pending_from_db and not batch:
@@ -1613,50 +1352,50 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                 orig_msg = None
                 try:
                     orig_msg = await ctx.channel.fetch_message(orig_msg_id)
-                except Exception: 
+                except Exception:  
                     pass
                 guidance = await get_ai_guidance(link)
                 lines = guidance. splitlines()
                 verdict_line = lines[0] if lines else "Keep/Skip"
                 reason_line = lines[1] if len(lines) > 1 else "No reason provided."
-                embed = verdict_embed(link, verdict_line, reason_line, author_mention=ctx.author. mention)
-                view = LinkActionView(link, ctx.author. id, orig_msg, pending_id, self, ai_verdict=guidance)
-                ask_msg = await safe_send(ctx, embed=embed, view=view)
+                verdict_msg = verdict_message(link, verdict_line, reason_line, author_mention=ctx. author.mention)
+                view = LinkActionView(link, ctx. author.id, orig_msg, pending_id, self, ai_verdict=guidance)
+                ask_msg = await safe_send(ctx, content=verdict_msg, view=view)
                 if pending_id:
-                    try: 
-                        await asyncio.to_thread(storage.update_pending_with_bot_msg_id, pending_id, getattr(ask_msg, "id", None))
+                    try:  
+                        await asyncio. to_thread(storage.update_pending_with_bot_msg_id, pending_id, getattr(ask_msg, "id", None))
                     except Exception as e:
                         logger.error(f"Failed to update pending with bot msg id: {e}")
-                self.pending_links[getattr(ask_msg, "id", None)] = {"link": link, "author_id": ctx.author.id, "original_message": orig_msg, "pending_db_id":  pending_id}
-                try: 
+                self.pending_links[getattr(ask_msg, "id", None)] = {"link": link, "author_id": ctx. author.id, "original_message": orig_msg, "pending_db_id": pending_id}
+                try:  
                     asyncio.create_task(self._delete_if_no_response(ask_msg, orig_msg, pending_id))
-                except Exception:
+                except Exception: 
                     pass
             for entry in batch:
                 link = entry["link"]
                 orig_msg = entry. get("original_message")
                 pending_id = entry.get("pending_db_id")
                 guidance = await get_ai_guidance(link)
-                lines = guidance.splitlines()
+                lines = guidance. splitlines()
                 verdict_line = lines[0] if lines else "Keep/Skip"
                 reason_line = lines[1] if len(lines) > 1 else "No reason provided."
-                embed = verdict_embed(link, verdict_line, reason_line, author_mention=ctx.author.mention)
-                view = LinkActionView(link, ctx.author.id, orig_msg, pending_id, self, ai_verdict=guidance)
-                ask_msg = await safe_send(ctx, embed=embed, view=view)
+                verdict_msg = verdict_message(link, verdict_line, reason_line, author_mention=ctx. author.mention)
+                view = LinkActionView(link, ctx. author.id, orig_msg, pending_id, self, ai_verdict=guidance)
+                ask_msg = await safe_send(ctx, content=verdict_msg, view=view)
                 if pending_id:
-                    try:
-                        await asyncio. to_thread(storage.update_pending_with_bot_msg_id, pending_id, getattr(ask_msg, "id", None))
+                    try: 
+                        await asyncio.to_thread(storage.update_pending_with_bot_msg_id, pending_id, getattr(ask_msg, "id", None))
                     except Exception as e:
                         logger.error(f"Failed to update pending with bot msg id: {e}")
-                self.pending_links[getattr(ask_msg, "id", None)] = {"link": link, "author_id": ctx. author.id, "original_message": orig_msg, "pending_db_id": pending_id}
+                self.pending_links[getattr(ask_msg, "id", None)] = {"link": link, "author_id": ctx.author.id, "original_message":  orig_msg, "pending_db_id": pending_id}
                 try:
                     asyncio.create_task(self._delete_if_no_response(ask_msg, orig_msg, pending_id))
-                except Exception:
+                except Exception: 
                     pass
-            if user_id in self.pending_batches:
+            if user_id in self.pending_batches: 
                 del self.pending_batches[user_id]
-        finally:
-            self. pendinglinks_in_progress. discard(user_id)
+        finally: 
+            self.pendinglinks_in_progress.discard(user_id)
 
     @commands.hybrid_command(name="category", description="Assign a category to a saved link")
     async def assign_category(self, ctx: commands.Context, *, category_name: str):
@@ -1675,10 +1414,10 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
             del self.links_to_categorize[ctx.author.id]
         except Exception as e:
             logger.error(f"assign_category failed: {e}")
-            await safe_send(ctx, embed=error_embed("Failed to save the link. Please try again."))
+            await safe_send(ctx, content=error_message("Failed to save the link. Please try again."))
 
     @commands.hybrid_command(name="cancel", description="Cancel saving a pending link")
-    async def cancel_save(self, ctx: commands.Context):
+    async def cancel_save(self, ctx: commands. Context):
         if ctx.author.id in self.links_to_categorize:
             del self.links_to_categorize[ctx.author.id]
             await safe_send(ctx, content=f"Link save cancelled, {ctx.author.mention}")
@@ -1692,8 +1431,8 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
             await safe_send(ctx, content="No links saved yet!")
             return
         if category:
-            filtered = [l for l in links if l. get("category", "").lower() == category.lower()]
-            if not filtered: 
+            filtered = [l for l in links if l.get("category", "").lower() == category.lower()]
+            if not filtered:  
                 await safe_send(ctx, content=f"No links found in category '{category}'")
                 return
             links = filtered
@@ -1712,7 +1451,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
     @commands.hybrid_command(name="categories", description="List categories")
     async def list_categories(self, ctx: commands.Context):
         categories = storage.get_categories()
-        if not categories: 
+        if not categories:  
             await safe_send(ctx, content="No categories created yet!")
             return
         response = "**📂 Categories:**\n"
@@ -1724,30 +1463,30 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
     async def delete_link(self, ctx: commands.Context, link_number: int):
         try:
             links = storage.get_saved_links()
-            if not links:
+            if not links: 
                 await safe_send(ctx, content="No links to delete!")
                 return
             if link_number < 1 or link_number > len(links):
-                await safe_send(ctx, content=f"Invalid number! Use 1-{len(links)}.")
+                await safe_send(ctx, content=f"Invalid number!  Use 1-{len(links)}.")
                 return
             removed = links.pop(link_number - 1)
             storage.clear_saved_links()
             for l in links:
                 storage.add_saved_link(l)
             cats = storage.get_categories()
-            cat_name = removed. get("category")
+            cat_name = removed.get("category")
             if cat_name in cats and removed. get("url") in cats[cat_name]:
                 cats[cat_name].remove(removed.get("url"))
-                if not cats[cat_name]: 
+                if not cats[cat_name]:  
                     del cats[cat_name]
                 storage.clear_categories()
                 for k, vs in cats.items():
                     for v in vs:
                         storage.add_link_to_category(k, v)
             await safe_send(ctx, content=f"✅ Link {link_number} deleted!")
-        except Exception as e: 
+        except Exception as e:  
             logger.error(f"delete_link failed: {e}")
-            await safe_send(ctx, embed=error_embed("Failed to delete the link. Please try again. "))
+            await safe_send(ctx, content=error_message("Failed to delete the link. Please try again."))
 
     @commands.hybrid_command(name="deletecategory", description="Delete a category and its links")
     async def delete_category(self, ctx: commands. Context, *, category_name: str):
@@ -1761,7 +1500,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
             for k, vs in cats.items():
                 if k == category_name:
                     continue
-                for v in vs: 
+                for v in vs:  
                     storage.add_link_to_category(k, v)
             links = storage.get_saved_links()
             remaining = [l for l in links if l.get("category") != category_name]
@@ -1772,7 +1511,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
         view = ConfirmYesNoView(author_id=ctx.author.id, on_confirm=do_delete, prompt=f"Delete '{category_name}'?")
         msg = await safe_send(ctx, content=f"Delete '{category_name}' and its {len(cats[category_name])} links?", view=view)
         if not msg:
-            await safe_send(ctx, embed=error_embed("Failed to attach confirmation buttons.  Please try again."))
+            await safe_send(ctx, content=error_message("Failed to attach confirmation buttons. Please try again."))
 
     @commands.hybrid_command(name="clearlinks", description="Clear all links (Admin)")
     @commands.has_permissions(administrator=True)
@@ -1783,8 +1522,8 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
 
         view = ConfirmYesNoView(author_id=ctx.author.id, on_confirm=do_clear, prompt="Delete ALL links and categories?")
         msg = await safe_send(ctx, content="⚠️ Delete ALL links and categories?", view=view)
-        if not msg: 
-            await safe_send(ctx, embed=error_embed("Failed to attach confirmation buttons. Please try again."))
+        if not msg:  
+            await safe_send(ctx, content=error_message("Failed to attach confirmation buttons. Please try again."))
 
     @commands.hybrid_command(name="setconfig", description="(Admin) Set per-guild config:  auto_delete_seconds, batch_threshold")
     @commands.has_permissions(manage_guild=True)
@@ -1802,12 +1541,12 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
     async def show_config(self, ctx: commands.Context):
         gid = ctx.guild.id if ctx.guild else None
         cfg = guild_config.load(gid) if gid else {}
-        await safe_send(ctx, content=f"Config: {cfg or 'defaults'}")
+        await safe_send(ctx, content=f"Config:  {cfg or 'defaults'}")
 
     @commands.hybrid_command(name="searchlinks", description="Search saved links")
     async def search_links(self, ctx: commands. Context, *, search_term: str):
         links = storage.get_saved_links()
-        results = [l for l in links if search_term. lower() in l.get("url", "").lower() or search_term.lower() in l.get("category", "").lower()]
+        results = [l for l in links if search_term.lower() in l.get("url", "").lower() or search_term.lower() in l.get("category", "").lower()]
         if not results:
             await safe_send(ctx, content=f"No results for '{search_term}'")
             return
@@ -1824,7 +1563,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
     async def analyze_link(self, ctx: commands.Context, url: str):
         if self.rate_limiter.is_limited(ctx.author.id, "analyze", cooldown=10.0):
             remaining = self.rate_limiter. get_remaining(ctx.author. id, "analyze", cooldown=10.0)
-            await safe_send(ctx, embed=ratelimit_embed(remaining))
+            await safe_send(ctx, content=ratelimit_message(remaining))
             return
         if not is_valid_url(url):
             await safe_send(ctx, content=f"{ctx.author.mention}, invalid URL.")
@@ -1834,8 +1573,8 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
             lines = guidance.splitlines()
             verdict_line = lines[0] if lines else "Keep/Skip"
             reason_line = lines[1] if len(lines) > 1 else "No reason provided."
-            embed = verdict_embed(url, verdict_line, reason_line, author_mention=ctx.author.mention)
-            await safe_send(ctx, embed=embed)
+            verdict_msg = verdict_message(url, verdict_line, reason_line, author_mention=ctx.author.mention)
+            await safe_send(ctx, content=verdict_msg)
 
     @commands.hybrid_command(name="stats", description="Show link stats")
     async def show_stats(self, ctx: commands.Context):
@@ -1854,16 +1593,18 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                 domain = urlparse(l["url"]).netloc. lower()
                 if domain. startswith("www."):
                     domain = domain[4:]
-                domains[domain] = domains.get(domain, 0) + 1
-            except Exception:
+                domains[domain] = domains. get(domain, 0) + 1
+            except Exception: 
                 pass
             author = l.get("author", "Unknown")
             authors[author] = authors.get(author, 0) + 1
-        embed = make_embed(title="📊 Link Stats", description=f"Total links:  **{total}**", color=discord.Color.gold())
-        embed.add_field(name="Top Categories", value="\n".join([f"• {k}:  {v}" for k, v in sorted(categories.items(), key=lambda x: -x[1])[:5]]) or "None", inline=False)
-        embed.add_field(name="Top Domains", value="\n".join([f"• {k}: {v}" for k, v in sorted(domains.items(), key=lambda x: -x[1])[:5]]) or "None", inline=False)
-        embed.add_field(name="Top Contributors", value="\n".join([f"• {k}: {v}" for k, v in sorted(authors.items(), key=lambda x: -x[1])[:5]]) or "None", inline=False)
-        await safe_send(ctx, embed=embed)
+        
+        top_cats = "\n".join([f"• {k}: {v}" for k, v in sorted(categories.items(), key=lambda x: -x[1])[:5]]) or "None"
+        top_domains = "\n".join([f"• {k}: {v}" for k, v in sorted(domains. items(), key=lambda x: -x[1])[:5]]) or "None"
+        top_authors = "\n".join([f"• {k}: {v}" for k, v in sorted(authors.items(), key=lambda x: -x[1])[:5]]) or "None"
+        
+        stats_msg = f"**📊 Link Stats**\n\nTotal links: **{total}**\n\n**Top Categories:**\n{top_cats}\n\n**Top Domains:**\n{top_domains}\n\n**Top Contributors:**\n{top_authors}"
+        await safe_send(ctx, content=stats_msg)
 
     @commands.hybrid_command(name="recent", description="Show 5 most recent links")
     async def show_recent(self, ctx: commands.Context):
@@ -1874,7 +1615,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
         recent = links[-5:][: :-1]
         response = "**🕒 Recently Saved:**\n\n"
         for i, l in enumerate(recent, 1):
-            response += f"{i}. **[{l. get('category','Uncategorized')}]** {l['url']}\n   *by {l.get('author','Unknown')} at {l.get('timestamp','')}*\n"
+            response += f"{i}. **[{l.get('category','Uncategorized')}]** {l['url']}\n   *by {l.get('author','Unknown')} at {l.get('timestamp','')}*\n"
         await safe_send(ctx, content=response)
 
     @commands.hybrid_command(name="audit_server", description="(Admin) Run an AI audit for a topic")
@@ -1887,7 +1628,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
             return
         ai_resp = await ai_server_audit(guild, topic=topic, extra_context=f"Requested by {ctx.author.display_name}.  Site: {COMMUNITY_LEARNING_URL}")
         preview = "\n". join(ai_resp. splitlines()[:8])
-        await safe_send(ctx, embed=make_embed(f"AI Audit:  {topic}", preview[: 1500], discord.Color.green()))
+        await safe_send(ctx, content=f"**AI Audit:  {topic}**\n\n{preview[: 1500]}")
         for chunk in (ai_resp[i:i+1900] for i in range(0, len(ai_resp), 1900)):
             await safe_send(ctx, content=chunk)
 
@@ -1901,10 +1642,10 @@ async def on_ready():
 ╔═══════════════════════════════════════════════╗
 ║  🤖 DIGITAL LABOUR BOT ONLINE                 ║
 ╚═══════════════════════════════════════════════╝
->_ User: {bot.user} (ID: {bot.user.id})
+>_ User: {bot.user} (ID: {bot.user. id})
 >_ PID: {os.getpid()}
 >_ Session: {SESSION_ID[: 8]}
->_ AI:   {'ENABLED ✅' if AI_ENABLED else 'DISABLED ⚠️'}
+>_ AI:  {'ENABLED ✅' if AI_ENABLED else 'DISABLED ⚠️'}
 >_ Guilds: {len(bot.guilds)}
 ╚═══════════════════════════════════════════════╝
 """
