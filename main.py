@@ -20,7 +20,7 @@ import os
 import re
 import time
 import uuid
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Callable, Awaitable
 from urllib.parse import urlparse
 
 import aiohttp
@@ -41,25 +41,37 @@ except Exception:
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
+
+def _has_model(client, model_name: str) -> bool:
+    try:
+        return hasattr(client, "models") and hasattr(client.models, "generate_content")
+    except Exception:
+        return False
+
+
 if GEMINI_API_KEY and genai is not None:
     ai_client = genai.Client(api_key=GEMINI_API_KEY)
-    AI_ENABLED = True
-    logger.info("✅ Google Gemini AI enabled")
+    AI_ENABLED = True and _has_model(ai_client, "gemini-2.0-flash-exp")
+    if AI_ENABLED:
+        logger.info("✅ Google Gemini AI enabled")
+    else:
+        logger.warning("⚠️ AI client missing generate_content; AI disabled")
 else:
     ai_client = None
     AI_ENABLED = False
     logger.warning("⚠️ AI disabled - Add GEMINI_API_KEY to enable")
 
-# Config
+# Defaults (can be overridden per-guild)
 AUTO_DELETE_ENABLED = os.environ.get("AUTO_DELETE_ENABLED", "1") == "1"
 try:
-    AUTO_DELETE_SECONDS = int(os.environ.get("AUTO_DELETE_AFTER", "5"))
+    AUTO_DELETE_SECONDS_DEFAULT = int(os.environ.get("AUTO_DELETE_AFTER", "5"))
 except ValueError:
-    AUTO_DELETE_SECONDS = 5
+    AUTO_DELETE_SECONDS_DEFAULT = 5
 
 BATCH_WINDOW_SECONDS = 3
-BATCH_THRESHOLD = 5
+BATCH_THRESHOLD_DEFAULT = 5
 CONFIRM_TIMEOUT = 4
+AI_PROMPT_LIMIT = 12000  # cap prompt length defensively
 
 # Storage files (used by storage module)
 RULES_FILE = "server_rules.txt"
@@ -89,12 +101,54 @@ async def safe_send(target, content=None, embed=None, ephemeral=False):
 
 
 # ------------------------------
+# Guild config (with storage fallback)
+# ------------------------------
+class GuildConfig:
+    def __init__(self):
+        self._mem = {}  # {guild_id: {"auto_delete_seconds": int, "batch_threshold": int}}
+
+    def load(self, guild_id: Optional[int]) -> Dict[str, int]:
+        if not guild_id:
+            return {}
+        try:
+            if hasattr(storage, "get_guild_config"):
+                cfg = storage.get_guild_config(guild_id) or {}
+                self._mem[guild_id] = cfg
+                return cfg
+        except Exception as e:
+            logger.debug(f"load guild config failed: {e}")
+        return self._mem.get(guild_id, {})
+
+    def save(self, guild_id: Optional[int], cfg: Dict[str, int]):
+        if not guild_id:
+            return
+        self._mem[guild_id] = cfg
+        try:
+            if hasattr(storage, "set_guild_config"):
+                storage.set_guild_config(guild_id, cfg)
+        except Exception as e:
+            logger.debug(f"save guild config failed: {e}")
+
+    def get_value(self, guild_id: Optional[int], key: str, default):
+        cfg = self.load(guild_id)
+        return cfg.get(key, default)
+
+
+guild_config = GuildConfig()
+
+
+# ------------------------------
 # AI helpers
 # ------------------------------
 async def ai_call(prompt: str, max_retries: int = 3, timeout: float = 18.0) -> str:
     """Wrapper to call the GenAI client in a background thread."""
     if not AI_ENABLED or ai_client is None:
         return "⚠️ AI unavailable. Set GEMINI_API_KEY to enable AI features."
+    if len(prompt) > AI_PROMPT_LIMIT:
+        logger.debug(f"Prompt truncated from {len(prompt)} to {AI_PROMPT_LIMIT}")
+        prompt = prompt[:AI_PROMPT_LIMIT]
+    if not _has_model(ai_client, "gemini-2.0-flash-exp"):
+        return "⚠️ AI model not available. Please check the client version."
     for attempt in range(max_retries):
         try:
             response = await asyncio.wait_for(
@@ -298,9 +352,11 @@ intents.message_content = True
 intents.reactions = True
 intents.members = True
 
+
 def get_prefix(bot, message):
     prefixes = ["!"]
     return commands.when_mentioned_or(*prefixes)(bot, message)
+
 
 class MyBot(commands.Bot):
     async def setup_hook(self):
@@ -328,8 +384,10 @@ class MyBot(commands.Bot):
 
         logger.info(f"✅ Total commands synced: {len(synced_commands)}")
 
+
 bot = MyBot(command_prefix=get_prefix, intents=intents, help_command=commands.DefaultHelpCommand())
 
+# UI Views
 class SummarizeView(discord.ui.View):
     def __init__(self, file_url: str, filename: str, author_id: int, context_note: str, cog):
         super().__init__(timeout=300)
@@ -378,6 +436,7 @@ class SummarizeView(discord.ui.View):
         except Exception:
             pass
 
+
 class DisclaimerView(discord.ui.View):
     def __init__(self, links: list, author_id: int, original_message, cog):
         super().__init__(timeout=60)
@@ -419,6 +478,7 @@ class DisclaimerView(discord.ui.View):
             await self.message.delete()
         except Exception:
             pass
+
 
 class LinkActionView(discord.ui.View):
     def __init__(self, link: str, author_id: int, original_message, pending_db_id: str, cog):
@@ -464,6 +524,7 @@ class LinkActionView(discord.ui.View):
             await interaction.message.edit(view=confirm_view)
         except Exception:
             pass
+
 
 class MultiLinkSelectView(discord.ui.View):
     def __init__(self, links: list, author_id: int, original_message, cog):
@@ -519,6 +580,7 @@ class MultiLinkSelectView(discord.ui.View):
                     pass
             return False
         return True
+
 
 class ConfirmMultiLinkView(discord.ui.View):
     def __init__(self, links: list, selected_indices: set, author_id: int, original_message, cog):
@@ -577,6 +639,7 @@ class ConfirmMultiLinkView(discord.ui.View):
         except Exception:
             pass
 
+
 class ConfirmDeleteView(discord.ui.View):
     def __init__(self, link: str, author_id: int, original_message, pending_db_id: str, bot_msg_id: int, cog):
         super().__init__(timeout=60)
@@ -629,6 +692,52 @@ class ConfirmDeleteView(discord.ui.View):
         except Exception:
             pass
 
+
+class ConfirmYesNoView(discord.ui.View):
+    """Button-based confirmation to replace reactions for reliability."""
+    def __init__(self, author_id: int, on_confirm: Callable[[], Awaitable[None]], prompt: str = "Are you sure?", timeout: int = 60):
+        super().__init__(timeout=timeout)
+        self.author_id = author_id
+        self.on_confirm = on_confirm
+        self.prompt = prompt
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await safe_send(interaction.response, "Not for you!", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Yes", style=discord.ButtonStyle.danger)
+    async def yes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        try:
+            await self.on_confirm()
+            await safe_send(interaction.followup, "✅ Done.", ephemeral=True)
+        except Exception as e:
+            logger.error(f"ConfirmYesNoView error: {e}")
+            await safe_send(interaction.followup, "⚠️ Failed to complete action.", ephemeral=True)
+        finally:
+            for child in self.children:
+                child.disabled = True
+            try:
+                await interaction.message.edit(view=self)
+            except Exception:
+                pass
+
+    @discord.ui.button(label="No", style=discord.ButtonStyle.secondary)
+    async def no(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await safe_send(interaction.response, "Cancelled.", ephemeral=True)
+        for child in self.children:
+            child.disabled = True
+        try:
+            await interaction.message.edit(view=self)
+        except Exception:
+            pass
+
+
+# ------------------------------
+# Cog implementation (full)
+# ------------------------------
 class LinkManagerCog(commands.Cog, name="LinkManager"):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -692,7 +801,10 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
             return prefix[0] if prefix else "!"
         return prefix or "!"
 
-    async def _delete_if_no_response(self, bot_message, original_message, pending_db_id, delay=AUTO_DELETE_SECONDS):
+    async def _delete_if_no_response(self, bot_message, original_message, pending_db_id, delay=None):
+        gid = original_message.guild.id if original_message and original_message.guild else None
+        per_guild_delay = guild_config.get_value(gid, "auto_delete_seconds", AUTO_DELETE_SECONDS_DEFAULT)
+        delay = delay if delay is not None else per_guild_delay
         if not AUTO_DELETE_ENABLED:
             return
         await asyncio.sleep(delay)
@@ -725,8 +837,10 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
         except Exception:
             pass
 
+    # Mention intent handler
     async def _handle_mention_query(self, message: discord.Message) -> bool:
         user_id = message.author.id
+        # simple cooldown
         if self.rate_limiter.is_limited(user_id, "ai_mention", cooldown=8.0):
             remaining = self.rate_limiter.get_remaining(user_id, "ai_mention", cooldown=8.0)
             await safe_send(message.channel, f"{message.author.mention}, please wait {remaining:.1f}s before asking AI again.", None)
@@ -738,6 +852,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
             content = content.replace(m, "")
         text = content.strip().lower()
 
+        # 1) "what is the server rules?"
         if re.search(r"\bwhat(?:'s| is)? the server rules\b", text) or ("server rules" in text and "what" in text):
             rules_text = None
             if message.guild:
@@ -761,6 +876,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
             await safe_send(message.channel, embed=embed)
             return True
 
+        # 2) improvements for a channel (channel mention)
         if ("improv" in text or "suggest" in text or "review" in text) and ("#" in message.content or "channel" in text):
             rules_text = None
             channel_asked = None
@@ -805,6 +921,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
             self.rate_limiter.register(user_id, "ai_mention")
             return True
 
+        # 3) Career guidance
         if any(k in text for k in ("career", "job", "placement", "interview", "resume", "cv", "jobs")):
             extra_ctx = f"User question: {content.strip()}\nWebsite: {COMMUNITY_LEARNING_URL}\nAudience: rural students"
             await message.channel.trigger_typing()
@@ -819,6 +936,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
             self.rate_limiter.register(user_id, "ai_mention")
             return True
 
+        # 4) How to learn using Discord
         if "how to learn" in text and "discord" in text or re.search(r"\bhow to use discord\b", text) or "learn using discord" in text:
             teacher_prompt = (
                 "You are a patient teacher. Explain, in numbered short steps, how students can use Discord to learn: "
@@ -834,6 +952,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
             self.rate_limiter.register(user_id, "ai_mention")
             return True
 
+        # 5) Avatar suggestion
         if "avatar" in text or "profile picture" in text or "which avatar" in text:
             tone = "friendly, professional"
             m = re.search(r"tone[:\-]\s*([a-z, ]+)", text)
@@ -849,6 +968,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
             self.rate_limiter.register(user_id, "ai_mention")
             return True
 
+        # 6) Channel suggestions
         if "what more channels" in text or "channels to create" in text or "suggest channels" in text:
             suggestions = await ai_channel_suggestions(message.guild, focus="study, career, low-resource teaching")
             try:
@@ -860,6 +980,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
             self.rate_limiter.register(user_id, "ai_mention")
             return True
 
+        # 7) prefix
         if "prefix" in text or "command prefix" in text:
             prefix = await self._get_preferred_prefix(message)
             await safe_send(message.channel, f"👋 My active command prefix is `{prefix}` — you can also use slash (/) commands.")
@@ -867,6 +988,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
 
         return False
 
+    # on_message integrates mention handling, file summarization, onboarding, link handling
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author == self.bot.user or message.id in self.processed_messages:
@@ -874,13 +996,16 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
         self.processed_messages.add(message.id)
         self.prune_processed()
 
+        # process commands first
         await self.bot.process_commands(message)
 
+        # if bot mentioned -> handle intents
         try:
             if self.bot.user in message.mentions:
                 handled = await self._handle_mention_query(message)
                 if handled:
                     return
+                # default welcome
                 prefix = await self._get_preferred_prefix(message)
                 embed = discord.Embed(
                     title="👋 Welcome to Digital Labour!",
@@ -897,6 +1022,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
         except Exception:
             logger.debug("mention handler error", exc_info=True)
 
+        # file summarization trigger: attachments or direct file links
         try:
             file_candidates = []
             for att in message.attachments:
@@ -920,6 +1046,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
         except Exception:
             logger.debug("file summarize trigger error", exc_info=True)
 
+        # onboarding (kept minimal and same as original)
         onboarding_data = storage.load_onboarding_data()
         user_id = str(message.author.id)
         if user_id in onboarding_data:
@@ -963,6 +1090,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                     pass
                 return
 
+        # link detection and handling (kept behavior)
         try:
             urls = [m.group(0) for m in re.finditer(URL_REGEX, message.content or "")]
         except re.error:
@@ -1008,7 +1136,9 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                 self.event_cleanup.add_event(ch_id, now)
                 self.event_cleanup.cleanup_old_events(ch_id, BATCH_WINDOW_SECONDS)
                 event_count = self.event_cleanup.get_event_count(ch_id, BATCH_WINDOW_SECONDS)
-                if event_count > BATCH_THRESHOLD:
+                gid = message.guild.id if message.guild else None
+                per_guild_threshold = guild_config.get_value(gid, "batch_threshold", BATCH_THRESHOLD_DEFAULT)
+                if event_count > per_guild_threshold:
                     try:
                         pending_entry = {
                             "user_id": message.author.id,
@@ -1052,13 +1182,16 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                             logger.error(f"Failed to update pending with bot msg id: {e}")
                     self.pending_links[getattr(ask_msg, "id", None)] = {"link": link, "author_id": message.author.id, "original_message": message, "pending_db_id": pending_id}
                     try:
-                        asyncio.create_task(self._delete_if_no_response(ask_msg, message, pending_id, delay=AUTO_DELETE_SECONDS))
+                        asyncio.create_task(self._delete_if_no_response(ask_msg, message, pending_id))
                     except Exception:
                         pass
                 except Exception as e:
                     logger.error(f"Failed to process link: {e}")
                     await safe_send(message.channel, "⚠️ Failed to handle this link. Please try again.")
 
+    # -------------------------
+    # Hybrid commands
+    # -------------------------
     @commands.hybrid_command(name="pendinglinks", description="Review your pending links captured during bursts")
     async def pendinglinks(self, ctx: commands.Context):
         user_id = ctx.author.id
@@ -1105,7 +1238,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                         logger.error(f"Failed to update pending with bot msg id: {e}")
                 self.pending_links[getattr(ask_msg, "id", None)] = {"link": link, "author_id": ctx.author.id, "original_message": orig_msg, "pending_db_id": pending_id}
                 try:
-                    asyncio.create_task(self._delete_if_no_response(ask_msg, orig_msg, pending_id, delay=AUTO_DELETE_SECONDS))
+                    asyncio.create_task(self._delete_if_no_response(ask_msg, orig_msg, pending_id))
                 except Exception:
                     pass
             for entry in batch:
@@ -1127,7 +1260,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                         logger.error(f"Failed to update pending with bot msg id: {e}")
                 self.pending_links[getattr(ask_msg, "id", None)] = {"link": link, "author_id": ctx.author.id, "original_message": orig_msg, "pending_db_id": pending_id}
                 try:
-                    asyncio.create_task(self._delete_if_no_response(ask_msg, orig_msg, pending_id, delay=AUTO_DELETE_SECONDS))
+                    asyncio.create_task(self._delete_if_no_response(ask_msg, orig_msg, pending_id))
                 except Exception:
                     pass
             if user_id in self.pending_batches:
@@ -1232,39 +1365,67 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
         if category_name not in cats:
             await safe_send(ctx, f"Category '{category_name}' doesn't exist!")
             return
-        try:
-            confirm = await safe_send(ctx, f"Delete '{category_name}' and its {len(cats[category_name])} links? React ✅ to confirm.")
-            if confirm:
-                try:
-                    await confirm.add_reaction("✅")
-                    await confirm.add_reaction("❌")
-                except Exception:
-                    pass
-                self.pending_category_deletion[confirm.id] = {"category": category_name, "author_id": ctx.author.id}
-        except Exception as e:
-            logger.error(f"delete_category prompt failed: {e}")
-            await safe_send(ctx, "⚠️ Failed to start deletion confirmation. Please try again.")
+
+        async def do_delete():
+            storage.clear_categories()
+            for k, vs in cats.items():
+                if k == category_name:
+                    continue
+                for v in vs:
+                    storage.add_link_to_category(k, v)
+            links = storage.get_saved_links()
+            remaining = [l for l in links if l.get("category") != category_name]
+            storage.clear_saved_links()
+            for l in remaining:
+                storage.add_saved_link(l)
+
+        view = ConfirmYesNoView(author_id=ctx.author.id, on_confirm=do_delete, prompt=f"Delete '{category_name}'?")
+        msg = await safe_send(ctx, f"Delete '{category_name}' and its {len(cats[category_name])} links?")
+        if msg and hasattr(msg, "edit"):
+            try:
+                await msg.edit(view=view)
+            except Exception as e:
+                logger.error(f"delete_category view attach failed: {e}")
+                await safe_send(ctx, "⚠️ Failed to attach confirmation buttons. Please try again.")
 
     @commands.hybrid_command(name="clearlinks", description="Clear all links (Admin)")
     @commands.has_permissions(administrator=True)
     async def clear_links(self, ctx: commands.Context):
-        try:
-            confirm = await safe_send(ctx, "⚠️ Delete ALL links and categories? React ✅ to confirm.")
-            if confirm:
-                try:
-                    await confirm.add_reaction("✅")
-                    await confirm.add_reaction("❌")
-                except Exception:
-                    pass
-                self.pending_clear_all[confirm.id] = {"author_id": ctx.author.id}
-        except Exception as e:
-            logger.error(f"clear_links prompt failed: {e}")
-            await safe_send(ctx, "⚠️ Failed to start clear confirmation. Please try again.")
+        async def do_clear():
+            storage.clear_categories()
+            storage.clear_saved_links()
+
+        view = ConfirmYesNoView(author_id=ctx.author.id, on_confirm=do_clear, prompt="Delete ALL links and categories?")
+        msg = await safe_send(ctx, "⚠️ Delete ALL links and categories?")
+        if msg and hasattr(msg, "edit"):
+            try:
+                await msg.edit(view=view)
+            except Exception as e:
+                logger.error(f"clear_links view attach failed: {e}")
+                await safe_send(ctx, "⚠️ Failed to attach confirmation buttons. Please try again.")
+
+    @commands.hybrid_command(name="setconfig", description="(Admin) Set per-guild config: auto_delete_seconds, batch_threshold")
+    @commands.has_permissions(manage_guild=True)
+    async def set_config(self, ctx: commands.Context, auto_delete_seconds: Optional[int] = None, batch_threshold: Optional[int] = None):
+        gid = ctx.guild.id if ctx.guild else None
+        cfg = guild_config.load(gid) if gid else {}
+        if auto_delete_seconds is not None and auto_delete_seconds > 0:
+            cfg["auto_delete_seconds"] = auto_delete_seconds
+        if batch_threshold is not None and batch_threshold > 0:
+            cfg["batch_threshold"] = batch_threshold
+        guild_config.save(gid, cfg)
+        await safe_send(ctx, f"Config updated: {cfg}")
+
+    @commands.hybrid_command(name="showconfig", description="Show current per-guild config")
+    async def show_config(self, ctx: commands.Context):
+        gid = ctx.guild.id if ctx.guild else None
+        cfg = guild_config.load(gid) if gid else {}
+        await safe_send(ctx, f"Config: {cfg or 'defaults'}")
 
     @commands.hybrid_command(name="searchlinks", description="Search saved links")
     async def search_links(self, ctx: commands.Context, *, search_term: str):
         links = storage.get_saved_links()
-        results = [l for l in links if search_term.lower() in l.get("url","").lower() or search_term.lower() in l.get("category","").lower()]
+        results = [l for l in links if search_term.lower() in l.get("url", "").lower() or search_term.lower() in l.get("category", "").lower()]
         if not results:
             await safe_send(ctx, f"No results for '{search_term}'")
             return
@@ -1315,9 +1476,9 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
             author = l.get("author", "Unknown")
             authors[author] = authors.get(author, 0) + 1
         embed = discord.Embed(title="📊 Link Stats", description=f"Total links: **{total}**", color=discord.Color.gold())
-        embed.add_field(name="Top Categories", value="\n".join([f"• {k}: {v}" for k,v in sorted(categories.items(), key=lambda x:-x[1])[:5]]) or "None", inline=False)
-        embed.add_field(name="Top Domains", value="\n".join([f"• {k}: {v}" for k,v in sorted(domains.items(), key=lambda x:-x[1])[:5]]) or "None", inline=False)
-        embed.add_field(name="Top Contributors", value="\n".join([f"• {k}: {v}" for k,v in sorted(authors.items(), key=lambda x:-x[1])[:5]]) or "None", inline=False)
+        embed.add_field(name="Top Categories", value="\n".join([f"• {k}: {v}" for k, v in sorted(categories.items(), key=lambda x: -x[1])[:5]]) or "None", inline=False)
+        embed.add_field(name="Top Domains", value="\n".join([f"• {k}: {v}" for k, v in sorted(domains.items(), key=lambda x: -x[1])[:5]]) or "None", inline=False)
+        embed.add_field(name="Top Contributors", value="\n".join([f"• {k}: {v}" for k, v in sorted(authors.items(), key=lambda x: -x[1])[:5]]) or "None", inline=False)
         await safe_send(ctx, embed=embed)
 
     @commands.hybrid_command(name="recent", description="Show 5 most recent links")
@@ -1332,6 +1493,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
             response += f"{i}. **[{l.get('category','Uncategorized')}]** {l['url']}\n   *by {l.get('author','Unknown')} at {l.get('timestamp','')}*\n"
         await safe_send(ctx, response)
 
+    # Admin audit
     @commands.hybrid_command(name="audit_server", description="(Admin) Run an AI audit for a topic")
     @commands.has_permissions(manage_guild=True)
     async def audit_server(self, ctx: commands.Context, *, topic: str = "full server"):
@@ -1350,6 +1512,9 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
             await safe_send(ctx, chunk)
 
 
+# ------------------------------
+# Events & startup
+# ------------------------------
 @bot.event
 async def on_ready():
     if not bot.get_cog("LinkManager"):
