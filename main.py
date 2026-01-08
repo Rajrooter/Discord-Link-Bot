@@ -759,7 +759,7 @@ class MyBot(commands.Bot):
                 logger.error(f"Test guild sync failed: {e}")
 
         logger.info(f"✅ Total commands synced: {len(synced_commands)}")
-
+        bot = MyBot(command_prefix=get_prefix, intents=intents, help_command=None)
 # ---------------------------------------------------------------------------
 # UI Views
 # ---------------------------------------------------------------------------
