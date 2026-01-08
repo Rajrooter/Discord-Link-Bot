@@ -29,6 +29,7 @@ from dotenv import load_dotenv
 
 import storage
 from utils import logger, is_valid_url, RateLimiter, EventCleanup
+SESSION_ID = str(uuid.uuid4())
 
 load_dotenv()
 
@@ -1545,7 +1546,7 @@ async def on_ready():
     if not bot.get_cog("LinkManager"):
         await bot.add_cog(LinkManagerCog(bot))
         logger.info("LinkManager cog added")
-    logger.info(f"Bot ready: {bot.user} (id: {bot.user.id})")
+    logger.info(f"Bot ready: {bot.user} (id: {bot.user.id}) pid={os.getpid()} session={SESSION_ID}")
 
 
 @bot.event
