@@ -71,16 +71,13 @@ BATCH_THRESHOLD_DEFAULT = 5
 CONFIRM_TIMEOUT = 4
 AI_PROMPT_LIMIT = 12000
 
-# Storage files (used by storage module)
 RULES_FILE = "server_rules.txt"
 
 URL_REGEX = r'(?:(?:https?://)|www\.)\S+'
 IGNORED_EXTENSIONS = ['.gif', '.png', '.jpg', '.jpeg', '.webp', '.bmp', '.mp4', '.mov', '.avi']
 
-# Context site provided by user
 COMMUNITY_LEARNING_URL = os.environ.get("COMMUNITY_LEARNING_URL", "https://share.google/yf57dJNzEyAVM0asz")
 
-# Download safety limits and types
 MAX_DOWNLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
 ALLOWED_CONTENT_TYPES = {
     "text/plain",
@@ -97,7 +94,6 @@ EXCEL_TYPES = {".xls", ".xlsx", ".xlsm", ".xlsb", ".xlt", ".xltx", ".csv"}
 HTML_TYPES = {".html", ".htm", ".xhtml", ".asp", ".aspx"}
 TEXTISH_TYPES = {".txt", ".rtf", ".doc", ".docx", ".wps", ".csv"}
 
-# Security alert channel (optional)
 SECURITY_ALERT_CHANNEL_ID = int(os.environ.get("SECURITY_ALERT_CHANNEL_ID", "0") or 0)
 
 
@@ -154,14 +150,13 @@ async def link_preview(url: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Cyberpunk Theme Helpers (ONLY for /help and /cmdinfo commands)
+# Cyberpunk Theme Helpers
 # ---------------------------------------------------------------------------
 
 def make_cyberpunk_help_embed() -> discord.Embed:
     embed = discord.Embed(title="", description="", color=0x00FF9C)
-
     header = """```ansi
-[2;36m╔═══════════════════════════════════════════════╗[0m
+[2;36m╔═════════════���═════════════════════════════════╗[0m
 [2;35m║[0m  [1;36m▓█████▄  ██▓  ▄████  ██▓▄▄▄█████▓ ▄▄▄       ██▓    [0m [2;35m║[0m
 [2;35m║[0m  [1;36m▒██▀ ██▌▓██▒ ██▒ ▀█▒▓██▒▓  ██▒ ▓▒▒████▄    ▓██▒    [0m [2;35m║[0m
 [2;35m║[0m  [1;35m░██   █▌▒██▒▒██░▄▄▄░▒██▒▒ ▓██░ ▒░▒██▄▀█▄  ▒██░    [0m [2;35m║[0m
@@ -236,7 +231,7 @@ def make_cyberpunk_help_embed() -> discord.Embed:
 [2;36m│[0m
 [1;32m│ ◆[0m [1;37mAuto Link Detection[0m [2;33m// Captures URLs automatically[0m
 [1;32m│ ◆[0m [1;37mAI Safety Check[0m [2;33m// Evaluates relevance & safety[0m
-[1;32m│ ◆[0m [1;37mDocument Summarization[0m [2;33m// .txt/.pdf/.docx support[0m
+[1;32m│ ◆[0m [1;37mDocument Summarization[0m [2;33m// .txt/.pdf/.docx/.csv/.xls[x][0m
 [1;32m│ ◆[0m [1;37mBurst Protection[0m [2;33m// Queues links during spam[0m
 [1;32m│ ◆[0m [1;37mSmart Categorization[0m [2;33m// Organize by topics[0m
 [2;36m│[0m
@@ -288,16 +283,19 @@ def make_compact_help_embed() -> discord.Embed:
 
 
 # ---------------------------------------------------------------------------
-# Safe send helper
+# Safe send helper (avoid view=None)
 # ---------------------------------------------------------------------------
 async def safe_send(target, content=None, embed=None, ephemeral=False, view=None):
     try:
+        kwargs = {"content": content, "embed": embed}
+        if view is not None:
+            kwargs["view"] = view
         if hasattr(target, "send"):
-            return await target.send(content=content, embed=embed, view=view)
+            return await target.send(**kwargs)
         if hasattr(target, "response"):
-            return await target.response.send_message(content=content, embed=embed, ephemeral=ephemeral, view=view)
+            return await target.response.send_message(ephemeral=ephemeral, **kwargs)
         if hasattr(target, "followup"):
-            return await target.followup.send(content=content, embed=embed, ephemeral=ephemeral, view=view)
+            return await target.followup.send(ephemeral=ephemeral, **kwargs)
     except Exception as e:
         logger.error(f"Send failed: {e}")
     return None
@@ -505,6 +503,26 @@ def excel_preview_table(data: bytes, filename: str, max_rows: int = 5) -> Option
 def extract_text_from_bytes(filename: str, data: bytes) -> Optional[str]:
     name = filename.lower()
     try:
+        ext = os.path.splitext(name)[1]
+        if ext in EXCEL_TYPES:
+            try:
+                import pandas as pd
+                if ext == ".csv":
+                    df = pd.read_csv(io.BytesIO(data))
+                else:
+                    df = pd.read_excel(io.BytesIO(data), engine=None)
+                if df.empty:
+                    return "(No rows)"
+                return df.head(20).to_csv(index=False)
+            except Exception as e:
+                logger.debug(f"Excel/CSV extraction error: {e}")
+                # fallback to raw decode for csv
+                if ext == ".csv":
+                    try:
+                        return data.decode("utf-8", errors="replace")
+                    except Exception:
+                        return data.decode("latin-1", errors="replace")
+                return None
         if name.endswith(".txt"):
             try:
                 return data.decode("utf-8", errors="replace")
@@ -611,7 +629,6 @@ class MyBot(commands.Bot):
         await self.add_cog(LinkManagerCog(self))
         logger.info("✅ LinkManager cog added")
 
-        # Startup sweep for orphaned pending (if storage supports)
         try:
             if hasattr(storage, "prune_orphaned_pending"):
                 pruned = await asyncio.to_thread(storage.prune_orphaned_pending)
@@ -656,7 +673,7 @@ bot.remove_command("help")
 
 
 # ---------------------------------------------------------------------------
-# UI Views (Summaries, link handling)
+# UI Views
 # ---------------------------------------------------------------------------
 
 class SummarizeView(discord.ui.View):
@@ -1273,7 +1290,6 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
         except Exception:
             logger.debug("mention handler error", exc_info=True)
 
-        # File summarize triggers
         try:
             file_candidates = []
             for att in message.attachments:
@@ -1302,8 +1318,6 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                         view.message = prompt_msg
         except Exception:
             logger.debug("file summarize trigger error", exc_info=True)
-
-        # ONBOARDING REMOVED
 
         try:
             urls = [m.group(0) for m in re.finditer(URL_REGEX, message.content or "")]
@@ -1829,7 +1843,7 @@ async def on_ready():
     ready_banner = f"""
 ╔═══════════════════════════════════════════════╗
 ║  🤖 DIGITAL LABOUR BOT ONLINE                 ║
-╚═══════════════════════════════════════════════╝
+╚═══════════════════════════════════════════���═══╝
 >_ User: {bot.user} (ID: {bot.user.id})
 >_ PID: {os.getpid()}
 >_ Session: {SESSION_ID[:8]}
