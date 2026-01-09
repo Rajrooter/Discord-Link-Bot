@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Digital Labour - main.py (consolidated with embed UI, 4-button link actions, link shortening)
+Digital Labour - main.py (context menu fix + embed UI + 4-button link actions + link shortening)
 """
 
 import asyncio
@@ -83,7 +83,7 @@ ALLOWED_CONTENT_TYPES = {
     "application/vnd.ms-excel",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "text/csv",
-    "application/octet-stream",  # Discord often uses this
+    "application/octet-stream",
 }
 EXCEL_TYPES = {".xls", ".xlsx", ".xlsm", ".xlsb", ".xlt", ".xltx", ".csv"}
 HTML_TYPES = {".html", ".htm", ".xhtml", ".asp", ".aspx"}
@@ -145,7 +145,6 @@ async def link_preview(url: str) -> str:
 
 
 async def ack_interaction(interaction: discord.Interaction, *, ephemeral: bool = True):
-    """Fast-ack an interaction; safe for rapid clickers."""
     try:
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=ephemeral)
@@ -617,6 +616,32 @@ def get_prefix(bot, message):
     return commands.when_mentioned_or(*prefixes)(bot, message)
 
 
+# ---------------------------------------------------------------------------
+# Context menu callbacks (top-level, not in a class)
+# ---------------------------------------------------------------------------
+
+@app_commands.context_menu(name="Summarize/Preview Document")
+async def summarize_preview_ctx(interaction: discord.Interaction, message: discord.Message):
+    cog = interaction.client.get_cog("LinkManager")
+    if not cog:
+        await interaction.response.send_message("⚠️ Cog not ready.", ephemeral=True)
+        return
+    await cog.handle_summarize_preview_ctx(interaction, message)
+
+
+@app_commands.context_menu(name="Analyze Link (AI)")
+async def analyze_link_ctx(interaction: discord.Interaction, message: discord.Message):
+    cog = interaction.client.get_cog("LinkManager")
+    if not cog:
+        await interaction.response.send_message("⚠️ Cog not ready.", ephemeral=True)
+        return
+    await cog.handle_analyze_link_ctx(interaction, message)
+
+
+# ---------------------------------------------------------------------------
+# Bot
+# ---------------------------------------------------------------------------
+
 class MyBot(commands.Bot):
     async def setup_hook(self):
         await self.add_cog(LinkManagerCog(self))
@@ -634,6 +659,10 @@ class MyBot(commands.Bot):
 
         cmd_names = [c.qualified_name for c in self.tree.walk_commands()]
         logger.info(f"🔧 App commands loaded (pre-sync): {cmd_names}")
+
+        # Register top-level context menus
+        self.tree.add_command(summarize_preview_ctx)
+        self.tree.add_command(analyze_link_ctx)
 
         synced_commands = []
         try:
@@ -666,7 +695,7 @@ bot.remove_command("help")
 
 
 # ---------------------------------------------------------------------------
-# UI Components
+# UI Components (views, modals)
 # ---------------------------------------------------------------------------
 
 class CategoryModal(discord.ui.Modal, title="Save Summary to Category"):
@@ -960,8 +989,8 @@ class MultiLinkSelectView(discord.ui.View):
                 try:
                     if self.message:
                         await self.message.edit(view=self)
-                except Exception:
-                    pass
+                    except Exception:
+                        pass
             return False
         return True
 
@@ -1145,9 +1174,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
         self.guild_pending_cap = 200
         self.guild_pending_counts = {}
 
-    # Context menu: Summarize/Preview Document
-    @app_commands.context_menu(name="Summarize/Preview Document")
-    async def summarize_preview_ctx(self, interaction: discord.Interaction, message: discord.Message):
+    async def handle_summarize_preview_ctx(self, interaction: discord.Interaction, message: discord.Message):
         await ack_interaction(interaction, ephemeral=True)
         file_url, filename = None, None
         for att in message.attachments:
@@ -1189,9 +1216,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
         )
         await safe_send(interaction.followup, embed=embed, content=preview_block or None, view=buttons)
 
-    # Context menu: Analyze Link (AI)
-    @app_commands.context_menu(name="Analyze Link (AI)")
-    async def analyze_link_ctx(self, interaction: discord.Interaction, message: discord.Message):
+    async def handle_analyze_link_ctx(self, interaction: discord.Interaction, message: discord.Message):
         await ack_interaction(interaction, ephemeral=True)
         link = None
         try:
@@ -1212,8 +1237,6 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
         preview = await link_preview(link)
         embed = make_verdict_embed(link, verdict_line, reason_line, preview)
         await safe_send(interaction.followup, embed=embed, ephemeral=True)
-
-    # ----------------- Core logic -----------------
 
     def prune_processed(self, max_size=50000):
         if len(self.processed_messages) > max_size:
@@ -1575,8 +1598,6 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                 except Exception as e:
                     logger.error(f"Failed to process link: {e}")
                     await safe_send(message.channel, content=error_message("Failed to handle this link. Please try again."))
-
-    # ----------------- Commands -----------------
 
     @commands.hybrid_command(name="help", description="Display full command reference with cyberpunk UI")
     async def show_help(self, ctx: commands.Context, compact: bool = False):
@@ -1954,6 +1975,10 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
         for chunk in (ai_resp[i:i+1900] for i in range(0, len(ai_resp), 1900)):
             await safe_send(ctx, content=chunk)
 
+
+# ---------------------------------------------------------------------------
+# Events & startup
+# ---------------------------------------------------------------------------
 
 @bot.event
 async def on_ready():
