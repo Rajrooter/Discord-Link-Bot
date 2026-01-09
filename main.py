@@ -1,12 +1,6 @@
 #!/usr/bin/env python3
 """
-Digital Labour - main.py
-
-- Cyberpunk theme for /help and /cmdinfo commands only
-- Plain text for all other responses
-- Onboarding removed
-- Sync diagnostics, safer downloads, link previews, Excel/CSV previews
-- Shorter summaries, burst guards, security alerts, robust cancel buttons
+Digital Labour - main.py (CSV fix + safe_send view guard)
 """
 
 import asyncio
@@ -31,7 +25,6 @@ SESSION_ID = str(uuid.uuid4())
 
 load_dotenv()
 
-# Optional Google Gemini client (set GEMINI_API_KEY to enable)
 try:
     from google import genai  # type: ignore
 except Exception:
@@ -59,7 +52,6 @@ else:
     AI_ENABLED = False
     logger.warning("⚠️ AI disabled - Add GEMINI_API_KEY to enable")
 
-# Defaults (can be overridden per-guild)
 AUTO_DELETE_ENABLED = os.environ.get("AUTO_DELETE_ENABLED", "1") == "1"
 try:
     AUTO_DELETE_SECONDS_DEFAULT = int(os.environ.get("AUTO_DELETE_AFTER", "5"))
@@ -89,6 +81,7 @@ ALLOWED_CONTENT_TYPES = {
     "application/vnd.ms-excel",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "text/csv",
+    "application/octet-stream",  # allow generic uploads (Discord often sends this)
 }
 EXCEL_TYPES = {".xls", ".xlsx", ".xlsm", ".xlsb", ".xlt", ".xltx", ".csv"}
 HTML_TYPES = {".html", ".htm", ".xhtml", ".asp", ".aspx"}
@@ -96,10 +89,6 @@ TEXTISH_TYPES = {".txt", ".rtf", ".doc", ".docx", ".wps", ".csv"}
 
 SECURITY_ALERT_CHANNEL_ID = int(os.environ.get("SECURITY_ALERT_CHANNEL_ID", "0") or 0)
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 async def security_alert(bot: commands.Bot, message: str):
     logger.warning(f"[SECURITY] {message}")
@@ -149,14 +138,10 @@ async def link_preview(url: str) -> str:
         return "🔗 Preview unavailable."
 
 
-# ---------------------------------------------------------------------------
-# Cyberpunk Theme Helpers
-# ---------------------------------------------------------------------------
-
 def make_cyberpunk_help_embed() -> discord.Embed:
     embed = discord.Embed(title="", description="", color=0x00FF9C)
-    header = """```ansi
-[2;36m╔═════════════���═════════════════════════════════╗[0m
+    embed.description = """```ansi
+[2;36m╔═══════════════════════════════════════════════╗[0m
 [2;35m║[0m  [1;36m▓█████▄  ██▓  ▄████  ██▓▄▄▄█████▓ ▄▄▄       ██▓    [0m [2;35m║[0m
 [2;35m║[0m  [1;36m▒██▀ ██▌▓██▒ ██▒ ▀█▒▓██▒▓  ██▒ ▓▒▒████▄    ▓██▒    [0m [2;35m║[0m
 [2;35m║[0m  [1;35m░██   █▌▒██▒▒██░▄▄▄░▒██▒▒ ▓██░ ▒░▒██▄▀█▄  ▒██░    [0m [2;35m║[0m
@@ -167,88 +152,67 @@ def make_cyberpunk_help_embed() -> discord.Embed:
 [1;32m>_[0m [1;37mLABOUR BOT v3.0[0m [2;33m// NEURAL LINK MANAGER[0m
 [2;35m>_[0m [2;37mStatus:[0m [1;32m[ONLINE][0m [2;33m// Session:  ACTIVE[0m
 ```"""
-    embed.description = header
-
-    link_commands = """```ansi
+    embed.add_field(
+        name="\u200b",
+        value="""```ansi
 [1;36m┌─[0m [1;37mLINK_OPERATIONS[0m [1;36m─────────────────────────────────┐[0m
-[1;36m│[0m
 [1;32m│ ▸[0m [1;33m/pendinglinks[0m
-[1;36m│   └─>[0m Review queued links from burst detection
-[1;36m│[0m
-[1;32m│ ▸[0m [1;33m/category[0m [2;35m<name>[0m
-[1;36m│   └─>[0m Assign category to pending link
-[1;36m│[0m
+[1;32m│ ▸[0m [1;33m/category[0m <name>
 [1;32m│ ▸[0m [1;33m/cancel[0m
-[1;36m│   └─>[0m Abort current link save operation
-[1;36m│[0m
-[1;32m│ ▸[0m [1;33m/getlinks[0m [2;35m[category][0m
-[1;36m│   └─>[0m Retrieve saved links (filter optional)
-[1;36m│[0m
-[1;32m│ ▸[0m [1;33m/deletelink[0m [2;35m<number>[0m
-[1;36m│   └─>[0m Remove link by index number
-[1;36m│[0m
+[1;32m│ ▸[0m [1;33m/getlinks[0m [category]
+[1;32m│ ▸[0m [1;33m/deletelink[0m <number>
 [1;36m└───────────────────────────────────────────────┘[0m
-```"""
-    embed.add_field(name="\u200b", value=link_commands, inline=False)
-
-    search_commands = """```ansi
+```""",
+        inline=False,
+    )
+    embed.add_field(
+        name="\u200b",
+        value="""```ansi
 [1;35m┌─[0m [1;37mANALYSIS_MODULES[0m [1;35m─────────────────────────────────┐[0m
-[1;35m│[0m
-[1;32m│ ▸[0m [1;33m/analyze[0m [2;35m<url>[0m
-[1;35m│   └─>[0m AI-powered link safety & relevance check
-[1;35m│[0m
-[1;32m│ ▸[0m [1;33m/searchlinks[0m [2;35m<term>[0m
-[1;35m│   └─>[0m Full-text search across saved links
-[1;35m│[0m
+[1;32m│ ▸[0m [1;33m/analyze[0m <url>
+[1;32m│ ▸[0m [1;33m/searchlinks[0m <term>
 [1;32m│ ▸[0m [1;33m/stats[0m
-[1;35m│   └─>[0m Display analytics dashboard
-[1;35m│[0m
 [1;32m│ ▸[0m [1;33m/recent[0m
-[1;35m│   └─>[0m Show 5 most recent saves
-[1;35m│[0m
 [1;35m└───────────────────────────────────────────────┘[0m
-```"""
-    embed.add_field(name="\u200b", value=search_commands, inline=False)
-
-    org_commands = """```ansi
+```""",
+        inline=False,
+    )
+    embed.add_field(
+        name="\u200b",
+        value="""```ansi
 [1;33m┌─[0m [1;37mORGANIZATION_SYSTEMS[0m [1;33m─────────────────────────────┐[0m
-[1;33m│[0m
 [1;32m│ ▸[0m [1;33m/categories[0m
-[1;33m│   └─>[0m List all categories with link counts
-[1;33m│[0m
-[1;32m│ ▸[0m [1;33m/deletecategory[0m [2;35m<name>[0m
-[1;33m│   └─>[0m Remove category and all its links
-[1;33m│[0m
-[1;32m│ ▸[0m [1;33m/clearlinks[0m [2;31m[ADMIN][0m
-[1;33m│   └─>[0m Purge all saved data (requires confirmation)
-[1;33m│[0m
+[1;32m│ ▸[0m [1;33m/deletecategory[0m <name>
+[1;32m│ ▸[0m [1;33m/clearlinks[0m [ADMIN]
 [1;33m└───────────────────────────────────────────────┘[0m
-```"""
-    embed.add_field(name="\u200b", value=org_commands, inline=False)
-
-    features = """```ansi
+```""",
+        inline=False,
+    )
+    embed.add_field(
+        name="\u200b",
+        value="""```ansi
 [2;36m┌─[0m [1;37mSYSTEM_FEATURES[0m [2;36m──────────────────────────────────┐[0m
-[2;36m│[0m
-[1;32m│ ◆[0m [1;37mAuto Link Detection[0m [2;33m// Captures URLs automatically[0m
-[1;32m│ ◆[0m [1;37mAI Safety Check[0m [2;33m// Evaluates relevance & safety[0m
-[1;32m│ ◆[0m [1;37mDocument Summarization[0m [2;33m// .txt/.pdf/.docx/.csv/.xls[x][0m
-[1;32m│ ◆[0m [1;37mBurst Protection[0m [2;33m// Queues links during spam[0m
-[1;32m│ ◆[0m [1;37mSmart Categorization[0m [2;33m// Organize by topics[0m
-[2;36m│[0m
+[1;32m│ ◆[0m Auto Link Detection
+[1;32m│ ◆[0m AI Safety Check
+[1;32m│ ◆[0m Document Summarization (.pdf/.docx/.txt/.csv/.xls[x])
+[1;32m│ ◆[0m Burst Protection
+[1;32m│ ◆[0m Smart Categorization
 [2;36m└───────────────────────────────────────────────┘[0m
-```"""
-    embed.add_field(name="\u200b", value=features, inline=False)
-
-    footer_text = """```ansi
+```""",
+        inline=False,
+    )
+    embed.add_field(
+        name="\u200b",
+        value="""```ansi
 [2;35m╔═══════════════════════════════════════════════╗[0m
-[2;35m║[0m [1;33m⚡[0m [2;37mTIP:[0m [1;37mMention me + question for AI help[0m        [2;35m║[0m
-[2;35m║[0m [1;33m⚡[0m [2;37mDrop a link → AI verdict → Save/Ignore[0m      [2;35m║[0m
-[2;35m║[0m [1;33m⚡[0m [2;37mUpload document → Click summarize button[0m   [2;35m║[0m
+[2;35m║[0m ⚡ TIP: Mention me + question for AI help      [2;35m║[0m
+[2;35m║[0m ⚡ Drop a link → AI verdict → Save/Ignore      [2;35m║[0m
+[2;35m║[0m ⚡ Upload document → Click summarize button    [2;35m║[0m
 [2;35m╚═══════════════════════════════════════════════╝[0m
-[2;33m>_[0m [2;37mPowered by Gemini AI[0m [1;35m//[0m [2;37mMade for Digital Labour[0m
-```"""
-    embed.add_field(name="\u200b", value=footer_text, inline=False)
-
+[2;33m>_[0m Powered by Gemini AI // Made for Digital Labour
+```""",
+        inline=False,
+    )
     embed.set_footer(text="[SYSTEM] Neural Link Established • Use /cmdinfo <command> for details")
     embed.timestamp = datetime.datetime.utcnow()
     return embed
@@ -282,13 +246,11 @@ def make_compact_help_embed() -> discord.Embed:
     return embed
 
 
-# ---------------------------------------------------------------------------
-# Safe send helper (avoid view=None)
-# ---------------------------------------------------------------------------
+# Safe send guard: only pass a view if it's a discord.ui.View
 async def safe_send(target, content=None, embed=None, ephemeral=False, view=None):
     try:
         kwargs = {"content": content, "embed": embed}
-        if view is not None:
+        if isinstance(view, discord.ui.View):
             kwargs["view"] = view
         if hasattr(target, "send"):
             return await target.send(**kwargs)
@@ -301,9 +263,6 @@ async def safe_send(target, content=None, embed=None, ephemeral=False, view=None
     return None
 
 
-# ---------------------------------------------------------------------------
-# Guild config (with storage fallback)
-# ---------------------------------------------------------------------------
 class GuildConfig:
     def __init__(self):
         self._mem = {}
@@ -337,9 +296,6 @@ class GuildConfig:
 
 guild_config = GuildConfig()
 
-# ---------------------------------------------------------------------------
-# AI helpers
-# ---------------------------------------------------------------------------
 
 async def ai_call(prompt: str, max_retries: int = 3, timeout: float = 18.0) -> str:
     if not AI_ENABLED or ai_client is None:
@@ -455,10 +411,6 @@ async def ai_channel_suggestions(guild: discord.Guild, focus: str = "study & car
     return await ai_call(prompt, max_retries=3, timeout=18.0)
 
 
-# ---------------------------------------------------------------------------
-# Document summarization helpers
-# ---------------------------------------------------------------------------
-
 async def download_bytes(url: str) -> Optional[bytes]:
     try:
         async with aiohttp.ClientSession() as session:
@@ -468,6 +420,7 @@ async def download_bytes(url: str) -> Optional[bytes]:
                     logger.warning(f"download_bytes: too large ({cl}) {url}")
                     return None
                 ctype = resp.headers.get("Content-Type", "").split(";")[0].strip().lower()
+                # allow if missing, or in allowlist
                 if ctype and ctype not in ALLOWED_CONTENT_TYPES:
                     logger.warning(f"download_bytes: disallowed content-type {ctype} for {url}")
                     return None
@@ -515,8 +468,7 @@ def extract_text_from_bytes(filename: str, data: bytes) -> Optional[str]:
                     return "(No rows)"
                 return df.head(20).to_csv(index=False)
             except Exception as e:
-                logger.debug(f"Excel/CSV extraction error: {e}")
-                # fallback to raw decode for csv
+                logger.debug(f"Excel/CSV extraction error (pandas path): {e}")
                 if ext == ".csv":
                     try:
                         return data.decode("utf-8", errors="replace")
@@ -580,10 +532,6 @@ async def summarize_document_bytes(filename: str, data: bytes, context_note: str
     return await ai_call(prompt, max_retries=3, timeout=18.0)
 
 
-# ---------------------------------------------------------------------------
-# Utilities & storage helpers
-# ---------------------------------------------------------------------------
-
 def is_media_url(url: str) -> bool:
     try:
         parsed = urlparse(url)
@@ -608,10 +556,6 @@ def load_rules() -> str:
     except FileNotFoundError:
         return "📒 Server Rules:\n1. Be respectful.\n2. Share educational content only.\n3. No spam."
 
-
-# ---------------------------------------------------------------------------
-# Bot and Views
-# ---------------------------------------------------------------------------
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -672,9 +616,8 @@ bot = MyBot(command_prefix=get_prefix, intents=intents, help_command=None)
 bot.remove_command("help")
 
 
-# ---------------------------------------------------------------------------
-# UI Views
-# ---------------------------------------------------------------------------
+# Views (same as previous with safe_send guard)
+
 
 class SummarizeView(discord.ui.View):
     def __init__(self, file_url: str, filename: str, author_id: int, context_note: str, cog):
@@ -1061,10 +1004,6 @@ class ConfirmYesNoView(discord.ui.View):
             pass
 
 
-# ---------------------------------------------------------------------------
-# Cog implementation
-# ---------------------------------------------------------------------------
-
 class LinkManagerCog(commands.Cog, name="LinkManager"):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -1444,10 +1383,6 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                     logger.error(f"Failed to process link: {e}")
                     await safe_send(message.channel, content=error_message("Failed to handle this link. Please try again."))
 
-    # ---------------------------------------------------------------------
-    # Hybrid commands
-    # ---------------------------------------------------------------------
-
     @commands.hybrid_command(name="help", description="Display full command reference with cyberpunk UI")
     async def show_help(self, ctx: commands.Context, compact: bool = False):
         embed = make_compact_help_embed() if compact else make_cyberpunk_help_embed()
@@ -1677,7 +1612,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                 for k, vs in cats.items():
                     for v in vs:
                         storage.add_link_to_category(k, v)
-            await safe_send(ctx, content=f"✅ Link {link_number} deleted!")
+            await safe_send(ctx, content=f"��� Link {link_number} deleted!")
         except Exception as e:
             logger.error(f"delete_link failed: {e}")
             await safe_send(ctx, content=error_message("Failed to delete the link. Please try again."))
@@ -1834,16 +1769,12 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
             await safe_send(ctx, content=chunk)
 
 
-# ---------------------------------------------------------------------------
-# Events & startup
-# ---------------------------------------------------------------------------
-
 @bot.event
 async def on_ready():
     ready_banner = f"""
 ╔═══════════════════════════════════════════════╗
 ║  🤖 DIGITAL LABOUR BOT ONLINE                 ║
-╚═══════════════════════════════════════════���═══╝
+╚═══════════════════════════════════════════════╝
 >_ User: {bot.user} (ID: {bot.user.id})
 >_ PID: {os.getpid()}
 >_ Session: {SESSION_ID[:8]}
