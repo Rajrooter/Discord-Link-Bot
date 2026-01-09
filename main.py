@@ -4,8 +4,9 @@ Digital Labour - main.py
 
 - Cyberpunk theme for /help and /cmdinfo commands only
 - Plain text for all other responses
-- Onboarding features removed
-- Sync diagnostics, safer downloads, and startup cleanup
+- Onboarding removed
+- Sync diagnostics, safer downloads, link previews, Excel/CSV previews
+- Shorter summaries, burst guards, security alerts, robust cancel buttons
 """
 
 import asyncio
@@ -79,19 +80,42 @@ IGNORED_EXTENSIONS = ['.gif', '.png', '.jpg', '.jpeg', '.webp', '.bmp', '.mp4', 
 # Context site provided by user
 COMMUNITY_LEARNING_URL = os.environ.get("COMMUNITY_LEARNING_URL", "https://share.google/yf57dJNzEyAVM0asz")
 
-# Download safety limits
+# Download safety limits and types
 MAX_DOWNLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
 ALLOWED_CONTENT_TYPES = {
     "text/plain",
+    "text/html",
     "application/pdf",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/rtf",
     "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "text/csv",
 }
+EXCEL_TYPES = {".xls", ".xlsx", ".xlsm", ".xlsb", ".xlt", ".xltx", ".csv"}
+HTML_TYPES = {".html", ".htm", ".xhtml", ".asp", ".aspx"}
+TEXTISH_TYPES = {".txt", ".rtf", ".doc", ".docx", ".wps", ".csv"}
+
+# Security alert channel (optional)
+SECURITY_ALERT_CHANNEL_ID = int(os.environ.get("SECURITY_ALERT_CHANNEL_ID", "0") or 0)
 
 
 # ---------------------------------------------------------------------------
-# Plain Text Message Helpers (Used everywhere EXCEPT /help and /cmdinfo)
+# Helpers
 # ---------------------------------------------------------------------------
+
+async def security_alert(bot: commands.Bot, message: str):
+    logger.warning(f"[SECURITY] {message}")
+    if not SECURITY_ALERT_CHANNEL_ID:
+        return
+    try:
+        ch = bot.get_channel(SECURITY_ALERT_CHANNEL_ID)
+        if ch:
+            await safe_send(ch, content=f"🚨 **Security Alert:** {message}")
+    except Exception as e:
+        logger.error(f"Failed to send security alert: {e}")
+
 
 def error_message(msg: str) -> str:
     return f"⚠️ **Error:** {msg}"
@@ -117,6 +141,16 @@ def summarize_progress_message(filename: str) -> str:
 
 def summarize_result_message(filename: str, body: str, requester: str) -> str:
     return f"📝 **Summary:  {filename}**\n\n{body}\n\n_Summarized for {requester}_"
+
+
+async def link_preview(url: str) -> str:
+    try:
+        parsed = urlparse(url)
+        host = parsed.netloc or "link"
+        path = parsed.path[:60] + ("..." if len(parsed.path) > 60 else "")
+        return f"🔗 **Preview:** `{host}{path}`"
+    except Exception:
+        return "🔗 Preview unavailable."
 
 
 # ---------------------------------------------------------------------------
@@ -243,7 +277,7 @@ def make_compact_help_embed() -> discord.Embed:
 
 **✨ Smart Features**
 → Auto-detect & AI check links
-→ Summarize documents (.pdf/.docx/.txt)
+→ Summarize documents (.pdf/.docx/.txt/.csv/.xls[x])
 → Mention me for AI help
 → Burst protection queuing
     """
@@ -431,27 +465,41 @@ async def download_bytes(url: str) -> Optional[bytes]:
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=30) as resp:
-                # Content-Length guard
                 cl = resp.headers.get("Content-Length")
                 if cl and int(cl) > MAX_DOWNLOAD_BYTES:
-                    logger.warning(f"download_bytes: Content too large ({cl} bytes) for {url}")
+                    logger.warning(f"download_bytes: too large ({cl}) {url}")
                     return None
-                # Content-Type allowlist (if present)
                 ctype = resp.headers.get("Content-Type", "").split(";")[0].strip().lower()
                 if ctype and ctype not in ALLOWED_CONTENT_TYPES:
-                    logger.warning(f"download_bytes: Disallowed content-type {ctype} for {url}")
+                    logger.warning(f"download_bytes: disallowed content-type {ctype} for {url}")
                     return None
                 if resp.status != 200:
-                    logger.debug(f"download_bytes non-200 for {url}: {resp.status}")
+                    logger.debug(f"download_bytes non-200 {resp.status} for {url}")
                     return None
                 data = await resp.read()
                 if len(data) > MAX_DOWNLOAD_BYTES:
-                    logger.warning(f"download_bytes: Payload too large after read ({len(data)} bytes) for {url}")
+                    logger.warning(f"download_bytes: payload too large ({len(data)}) for {url}")
                     return None
                 return data
     except Exception as e:
         logger.debug(f"download_bytes error for {url}: {e}")
     return None
+
+
+def excel_preview_table(data: bytes, filename: str, max_rows: int = 5) -> Optional[str]:
+    try:
+        import pandas as pd
+        ext = os.path.splitext(filename.lower())[1]
+        if ext == ".csv":
+            df = pd.read_csv(io.BytesIO(data))
+        else:
+            df = pd.read_excel(io.BytesIO(data), engine=None)
+        if df.empty:
+            return "*(No rows to display)*"
+        return df.head(max_rows).to_markdown(index=False)
+    except Exception as e:
+        logger.debug(f"excel_preview_table error: {e}")
+        return None
 
 
 def extract_text_from_bytes(filename: str, data: bytes) -> Optional[str]:
@@ -481,6 +529,21 @@ def extract_text_from_bytes(filename: str, data: bytes) -> Optional[str]:
             except Exception as e:
                 logger.debug(f"DOCX extraction error: {e}")
                 return None
+        if name.endswith((".html", ".htm", ".xhtml", ".asp", ".aspx")):
+            try:
+                from bs4 import BeautifulSoup
+                soup = BeautifulSoup(data, "html.parser")
+                return soup.get_text(" ", strip=True)
+            except Exception as e:
+                logger.debug(f"HTML extraction error: {e}")
+                return None
+        if name.endswith(".rtf"):
+            try:
+                import striprtf
+                return striprtf.rtf_to_text(data.decode("latin-1", errors="ignore"))
+            except Exception as e:
+                logger.debug(f"RTF extraction error: {e}")
+                return None
     except Exception as e:
         logger.debug(f"extract_text_from_bytes error: {e}")
     return None
@@ -492,12 +555,11 @@ async def summarize_document_bytes(filename: str, data: bytes, context_note: str
         return "⚠️ Couldn't extract text. For PDF/DOCX ensure PyPDF2 and python-docx are installed or provide a .txt version."
     excerpt = text[:40000]
     prompt = (
-        "You are a gentle teacher. Summarize this document for rural students in simple language.\n"
-        "Use this structure:\n"
-        "1) One-line summary\n2) 3 key points (bullets)\n3) 3 simple action steps\n4) A one-paragraph moderator-ready summary\n\n"
-        f"Context note: {context_note}\n\nDocument excerpt:\n{excerpt}"
+        "Summarize in <=10 lines. Be clear, kid-friendly, concise.\n"
+        "Sections: Markdown overview, Content, Red Flags, Conclusion, Real-life tip. No filler, no random additions.\n"
+        f"Context: {context_note}\n\nContent:\n{excerpt}"
     )
-    return await ai_call(prompt, max_retries=3, timeout=25.0)
+    return await ai_call(prompt, max_retries=3, timeout=18.0)
 
 
 # ---------------------------------------------------------------------------
@@ -546,11 +608,10 @@ def get_prefix(bot, message):
 
 class MyBot(commands.Bot):
     async def setup_hook(self):
-        # Add cog first
         await self.add_cog(LinkManagerCog(self))
         logger.info("✅ LinkManager cog added")
 
-        # Startup sweep for orphaned pending links (optional storage support)
+        # Startup sweep for orphaned pending (if storage supports)
         try:
             if hasattr(storage, "prune_orphaned_pending"):
                 pruned = await asyncio.to_thread(storage.prune_orphaned_pending)
@@ -561,7 +622,6 @@ class MyBot(commands.Bot):
         except Exception as e:
             logger.warning(f"Startup prune failed: {e}")
 
-        # Log loaded commands pre-sync
         cmd_names = [c.qualified_name for c in self.tree.walk_commands()]
         logger.info(f"🔧 App commands loaded (pre-sync): {cmd_names}")
 
@@ -591,13 +651,12 @@ class MyBot(commands.Bot):
         logger.info(f"✅ Total commands synced: {len(synced_commands)}")
 
 
-# Instantiate bot, remove default help to force custom embed
 bot = MyBot(command_prefix=get_prefix, intents=intents, help_command=None)
 bot.remove_command("help")
 
 
 # ---------------------------------------------------------------------------
-# UI Views (All updated to use plain text instead of embeds)
+# UI Views (Summaries, link handling)
 # ---------------------------------------------------------------------------
 
 class SummarizeView(discord.ui.View):
@@ -624,6 +683,11 @@ class SummarizeView(discord.ui.View):
             if not data:
                 await safe_send(interaction.followup, content=error_message("Failed to download the file."), ephemeral=True)
                 return
+            ext = os.path.splitext(self.filename.lower())[1]
+            if ext in EXCEL_TYPES:
+                table_md = excel_preview_table(data, self.filename, max_rows=5)
+                if table_md:
+                    await safe_send(interaction.channel, content=f"🧾 **Preview of {self.filename} (first rows):**\n```markdown\n{table_md}\n```")
             progress = await safe_send(interaction.followup, content=summarize_progress_message(self.filename), ephemeral=True)
             summary = await summarize_document_bytes(self.filename, data, context_note=self.context_note)
             result_msg = summarize_result_message(self.filename, summary[:3500], interaction.user.mention)
@@ -646,11 +710,22 @@ class SummarizeView(discord.ui.View):
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await safe_send(interaction.response, content="Cancelled summarization.", ephemeral=True)
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except Exception:
+            try:
+                await interaction.followup.send("Cancelled.", ephemeral=True)
+            except Exception:
+                pass
         for child in self.children:
             child.disabled = True
         try:
             await interaction.message.edit(view=self)
+        except Exception:
+            pass
+        try:
+            if getattr(self, "message", None):
+                await self.message.edit(view=self)
         except Exception:
             pass
 
@@ -685,7 +760,13 @@ class DisclaimerView(discord.ui.View):
 
     @discord.ui.button(label="Ignore", style=discord.ButtonStyle.secondary, emoji="❌")
     async def no_button(self, interaction, button):
-        await safe_send(interaction.response, content="👍 Ignoring these links.", ephemeral=True)
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except Exception:
+            try:
+                await interaction.followup.send("👍 Ignoring these links.", ephemeral=True)
+            except Exception:
+                pass
         try:
             await self.message.delete()
         except Exception:
@@ -715,6 +796,9 @@ class LinkActionView(discord.ui.View):
             await asyncio.to_thread(storage.delete_pending_link_by_id, self.pending_db_id)
             if interaction.message.id in self.cog.pending_links:
                 del self.cog.pending_links[interaction.message.id]
+            gid = interaction.guild.id if interaction.guild else None
+            if gid in self.cog.guild_pending_counts and self.cog.guild_pending_counts[gid] > 0:
+                self.cog.guild_pending_counts[gid] -= 1
             self.cog.links_to_categorize[self.author_id] = {"link": self.link, "message": self.original_message}
             prefix = await self.cog._get_preferred_prefix(self.original_message) if self.original_message else "!"
             await safe_send(interaction.response, content=f"✅ Link marked for saving! Use `{prefix}category <name>` to finalize.", ephemeral=True)
@@ -842,7 +926,13 @@ class ConfirmMultiLinkView(discord.ui.View):
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
     async def cancel_button(self, interaction, button):
-        await interaction.response.defer()
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except Exception:
+            try:
+                await interaction.followup.send("Cancelled.", ephemeral=True)
+            except Exception:
+                pass
         for child in self.children:
             child.disabled = True
         try:
@@ -881,6 +971,9 @@ class ConfirmDeleteView(discord.ui.View):
                 logger.error(f"Pending delete failed: {e}")
             if self.bot_msg_id in self.cog.pending_links:
                 del self.cog.pending_links[self.bot_msg_id]
+            gid = interaction.guild.id if interaction.guild else None
+            if gid in self.cog.guild_pending_counts and self.cog.guild_pending_counts[gid] > 0:
+                self.cog.guild_pending_counts[gid] -= 1
             await safe_send(interaction.response, content="🗑️ Link deleted.", ephemeral=True)
         except Exception as e:
             logger.error(f"Confirm delete failed: {e}")
@@ -895,7 +988,13 @@ class ConfirmDeleteView(discord.ui.View):
 
     @discord.ui.button(label="Keep", style=discord.ButtonStyle.secondary, emoji="↩️")
     async def cancel_button(self, interaction, button):
-        await safe_send(interaction.response, content="Deletion cancelled.", ephemeral=True)
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except Exception:
+            try:
+                await interaction.followup.send("Deletion cancelled.", ephemeral=True)
+            except Exception:
+                pass
         for child in self.children:
             child.disabled = True
         try:
@@ -963,6 +1062,8 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
         self.rate_limiter = RateLimiter()
         self.pendinglinks_in_progress = set()
         self.cleanup_task = None
+        self.guild_pending_cap = 200
+        self.guild_pending_counts = {}
 
     def prune_processed(self, max_size=50000):
         if len(self.processed_messages) > max_size:
@@ -1015,6 +1116,8 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                     await asyncio.to_thread(storage.delete_pending_link_by_id, pending_db_id)
                 except Exception:
                     pass
+                if gid in self.guild_pending_counts and self.guild_pending_counts[gid] > 0:
+                    self.guild_pending_counts[gid] -= 1
         except Exception as e:
             logger.debug(f"_delete_if_no_response error: {e}")
 
@@ -1088,7 +1191,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
             await message.channel.trigger_typing()
             ai_response = await ai_improve_rules(rules_text or "No content found", server_summary)
             preview = "\n".join(ai_response.splitlines()[:8])
-            await safe_send(message.channel, content=f"🧠 **AI: Improvements**\n\n{preview[:1500]}")
+            await safe_send(message.channel, content=f"🧠 **AI:  Improvements**\n\n{preview[:1500]}")
             for chunk in (ai_response[i:i+1900] for i in range(0, len(ai_response), 1900)):
                 await safe_send(message.channel, content=chunk)
             self.rate_limiter.register(user_id, "ai_mention")
@@ -1170,15 +1273,16 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
         except Exception:
             logger.debug("mention handler error", exc_info=True)
 
+        # File summarize triggers
         try:
             file_candidates = []
             for att in message.attachments:
                 fn = att.filename.lower()
-                if fn.endswith((".txt", ".pdf", ".docx")):
+                if fn.endswith(tuple(EXCEL_TYPES | HTML_TYPES | TEXTISH_TYPES | {".pdf"})):
                     file_candidates.append((att.url, att.filename))
             for m in re.finditer(URL_REGEX, message.content or ""):
                 url = m.group(0)
-                if urlparse(url).path.lower().endswith((".txt", ".pdf", ".docx")):
+                if urlparse(url).path.lower().endswith(tuple(EXCEL_TYPES | HTML_TYPES | TEXTISH_TYPES | {".pdf"})):
                     file_candidates.append((url, os.path.basename(urlparse(url).path)))
             if file_candidates:
                 for url, filename in file_candidates:
@@ -1199,6 +1303,8 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
         except Exception:
             logger.debug("file summarize trigger error", exc_info=True)
 
+        # ONBOARDING REMOVED
+
         try:
             urls = [m.group(0) for m in re.finditer(URL_REGEX, message.content or "")]
         except re.error:
@@ -1216,6 +1322,13 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                     remaining = non_media_links[25:]
                     for link in remaining:
                         try:
+                            gid = message.guild.id if message.guild else None
+                            count = self.guild_pending_counts.get(gid, 0) + 1
+                            self.guild_pending_counts[gid] = count
+                            if count > self.guild_pending_cap:
+                                await security_alert(self.bot, f"Pending queue cap exceeded in guild {gid}.")
+                                await safe_send(message.channel, content="⚠️ Too many pending links right now. Please try again later.")
+                                continue
                             pending_entry = {
                                 "user_id": message.author.id,
                                 "link": link,
@@ -1248,6 +1361,12 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                 per_guild_threshold = guild_config.get_value(gid, "batch_threshold", BATCH_THRESHOLD_DEFAULT)
                 if event_count > per_guild_threshold:
                     try:
+                        count = self.guild_pending_counts.get(gid, 0) + 1
+                        self.guild_pending_counts[gid] = count
+                        if count > self.guild_pending_cap:
+                            await security_alert(self.bot, f"Pending queue cap exceeded in guild {gid}.")
+                            await safe_send(message.channel, content="⚠️ Too many pending links right now. Please try again later.")
+                            continue
                         pending_entry = {
                             "user_id": message.author.id,
                             "link": link,
@@ -1269,6 +1388,12 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                         await safe_send(message.channel, content=error_message("Failed to queue this link. Please try again."))
                         continue
                 try:
+                    count = self.guild_pending_counts.get(gid, 0) + 1
+                    self.guild_pending_counts[gid] = count
+                    if count > self.guild_pending_cap:
+                        await security_alert(self.bot, f"Pending queue cap exceeded in guild {gid}.")
+                        await safe_send(message.channel, content="⚠️ Too many pending links right now. Please try again later.")
+                        continue
                     pending_entry = {
                         "user_id": message.author.id,
                         "link": link,
@@ -1282,6 +1407,8 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                     verdict_line = lines[0] if lines else "Keep/Skip"
                     reason_line = lines[1] if len(lines) > 1 else "No reason provided."
                     verdict_msg = verdict_message(link, verdict_line, reason_line, author_mention=message.author.mention)
+                    preview = await link_preview(link)
+                    verdict_msg = f"{verdict_msg}\n{preview}"
                     view = LinkActionView(link, message.author.id, message, pending_id, self, ai_verdict=guidance)
                     ask_msg = await safe_send(message.channel, content=verdict_msg, view=view)
                     if pending_id:
@@ -1393,6 +1520,8 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                 verdict_line = lines[0] if lines else "Keep/Skip"
                 reason_line = lines[1] if len(lines) > 1 else "No reason provided."
                 verdict_msg = verdict_message(link, verdict_line, reason_line, author_mention=ctx.author.mention)
+                preview = await link_preview(link)
+                verdict_msg = f"{verdict_msg}\n{preview}"
                 view = LinkActionView(link, ctx.author.id, orig_msg, pending_id, self, ai_verdict=guidance)
                 ask_msg = await safe_send(ctx, content=verdict_msg, view=view)
                 if pending_id:
@@ -1419,6 +1548,8 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                 verdict_line = lines[0] if lines else "Keep/Skip"
                 reason_line = lines[1] if len(lines) > 1 else "No reason provided."
                 verdict_msg = verdict_message(link, verdict_line, reason_line, author_mention=ctx.author.mention)
+                preview = await link_preview(link)
+                verdict_msg = f"{verdict_msg}\n{preview}"
                 view = LinkActionView(link, ctx.author.id, orig_msg, pending_id, self, ai_verdict=guidance)
                 ask_msg = await safe_send(ctx, content=verdict_msg, view=view)
                 if pending_id:
@@ -1441,7 +1572,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
         finally:
             self.pendinglinks_in_progress.discard(user_id)
 
-    @commands.hybrid_command(name="category", description="Assign a category to a saved link")
+    @commands.hybrid_command(name="category", description="Assign a category to a saved link (creates if missing)")
     async def assign_category(self, ctx: commands.Context, *, category_name: str):
         if ctx.author.id not in self.links_to_categorize:
             await safe_send(ctx, content=f"No pending link to categorize, {ctx.author.mention}")
@@ -1455,11 +1586,11 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                 "url": link,
                 "timestamp": timestamp,
                 "author": str(message.author) if (message and message.author) else "Unknown",
-                "category": category_name
+                "category": category_name,
             }
             await asyncio.to_thread(storage.add_saved_link, link_entry)
             await asyncio.to_thread(storage.add_link_to_category, category_name, link)
-            await safe_send(ctx, content=f"✅ Link saved to '{category_name}', {ctx.author.mention}!")
+            await safe_send(ctx, content=f"✅ Saved to **{category_name}**. You can pick this name again next time. ({ctx.author.mention})")
             del self.links_to_categorize[ctx.author.id]
         except Exception as e:
             logger.error(f"assign_category failed: {e}")
@@ -1623,6 +1754,8 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
             verdict_line = lines[0] if lines else "Keep/Skip"
             reason_line = lines[1] if len(lines) > 1 else "No reason provided."
             verdict_msg = verdict_message(url, verdict_line, reason_line, author_mention=ctx.author.mention)
+            preview = await link_preview(url)
+            verdict_msg = f"{verdict_msg}\n{preview}"
             await safe_send(ctx, content=verdict_msg)
 
     @commands.hybrid_command(name="stats", description="Show link stats")
