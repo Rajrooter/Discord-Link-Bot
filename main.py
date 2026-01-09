@@ -477,9 +477,11 @@ def load_rules() -> str:
 # Intents and prefix
 # ---------------------------------------------------------------------------
 intents = discord.Intents.default()
+intents.messages = True
 intents.message_content = True
-intents.reactions = True
+intents.guilds = True
 intents.members = True
+intents.reactions = True
 
 def get_prefix(bot, message):
     prefixes = ["!"]
@@ -1333,12 +1335,19 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
+        logger.debug(f"on_message: guild={getattr(message.guild, 'id', None)} channel={getattr(message.channel, 'id', None)} author={message.author} content={message.content!r}")
         if message.author == self.bot.user or message.id in self.processed_messages:
             return
         self.processed_messages.add(message.id)
         self.prune_processed()
 
         await self.bot.process_commands(message)
+
+        try:
+            urls = [m.group(0) for m in re.finditer(URL_REGEX, message.content or "")]
+            logger.debug(f"on_message urls={urls}")
+        except re.error:
+            urls = []
 
         try:
             if self.bot.user in message.mentions:
@@ -1385,11 +1394,6 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                         view.message = prompt_msg
         except Exception:
             logger.debug("file summarize trigger error", exc_info=True)
-
-        try:
-            urls = [m.group(0) for m in re.finditer(URL_REGEX, message.content or "")]
-        except re.error:
-            urls = []
 
         if urls:
             non_media_links = [link for link in urls if not is_media_url(link) and is_valid_url(link)]
@@ -1965,7 +1969,7 @@ async def on_ready():
 >_ User: {bot.user} (ID: {bot.user.id})
 >_ PID: {os.getpid()}
 >_ Session: {SESSION_ID[:8]}
->_ AI:  {'ENABLED ✅' if AI_ENABLED else 'DISABLED ⚠��'}
+>_ AI:  {'ENABLED ✅' if AI_ENABLED else 'DISABLED ⚠️'}
 >_ Guilds: {len(bot.guilds)}
 ╚═══════════════════════════════════════════════╝
 """
