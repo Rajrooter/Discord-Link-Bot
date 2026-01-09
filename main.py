@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Digital Labour - main.py (consolidated)
+Digital Labour - main.py (consolidated with embed UI, 4-button link actions, link shortening)
 """
 
 import asyncio
@@ -10,6 +10,7 @@ import os
 import re
 import time
 import uuid
+import urllib.parse
 from typing import Optional, List, Dict, Callable, Awaitable
 from urllib.parse import urlparse
 
@@ -152,6 +153,19 @@ async def ack_interaction(interaction: discord.Interaction, *, ephemeral: bool =
         pass
 
 
+def make_verdict_embed(link: str, verdict_line: str, reason_line: str, preview: str) -> discord.Embed:
+    embed = discord.Embed(
+        title=verdict_line,
+        description=reason_line,
+        color=0x00C853 if "Keep" in verdict_line else 0xFFA000
+    )
+    embed.add_field(name="Link", value=f"`{link}`", inline=False)
+    if preview:
+        embed.add_field(name="Preview", value=preview, inline=False)
+    embed.set_footer(text="Choose: Save now • Save later • Shorten • Cancel")
+    return embed
+
+
 def make_cyberpunk_help_embed() -> discord.Embed:
     embed = discord.Embed(title="", description="", color=0x00FF9C)
     embed.description = """```ansi
@@ -211,7 +225,7 @@ def make_cyberpunk_help_embed() -> discord.Embed:
 [1;32m│ ◆[0m Document Summarization (.pdf/.docx/.txt/.csv/.xls[x])
 [1;32m│ ◆[0m Burst Protection
 [1;32m│ ◆[0m Smart Categorization
-[2;36m└──────────────────────────────────────���────────┘[0m
+[2;36m└───────────────────────────────────────────────┘[0m
 ```""",
         inline=False,
     )
@@ -235,26 +249,34 @@ def make_cyberpunk_help_embed() -> discord.Embed:
 def make_compact_help_embed() -> discord.Embed:
     embed = discord.Embed(
         title="⚡ LABOUR BOT // COMMAND INDEX",
-        description="```ansi\n[1;32m>_[0m [1;37mNeural Link Manager v3.0[0m\n```",
-        color=0x00FF9C
+        description="`Neural Link Manager v3.0`",
+        color=0x5865F2
     )
-    commands_list = """
-**🔗 Link Operations**
-`/pendinglinks` • `/category` • `/cancel` • `/getlinks` • `/deletelink`
-
-**🔍 Analysis & Search**
-`/analyze` • `/searchlinks` • `/stats` • `/recent`
-
-**📁 Organization**
-`/categories` • `/deletecategory` • `/clearlinks`
-
-**✨ Smart Features**
-→ Auto-detect & AI check links
-→ Summarize documents (.pdf/.docx/.txt/.csv/.xls[x])
-→ Mention me for AI help
-→ Burst protection queuing
-    """
-    embed.description += commands_list
+    embed.add_field(
+        name="🔗 Link Operations",
+        value="`/pendinglinks` • `/category` • `/cancel` • `/getlinks` • `/deletelink`",
+        inline=False
+    )
+    embed.add_field(
+        name="🔍 Analysis & Search",
+        value="`/analyze` • `/searchlinks` • `/stats` • `/recent`",
+        inline=False
+    )
+    embed.add_field(
+        name="🗂️ Organization",
+        value="`/categories` • `/deletecategory` • `/clearlinks`",
+        inline=False
+    )
+    embed.add_field(
+        name="✨ Smart Features",
+        value=(
+            "→ Auto-detect & AI check links\n"
+            "→ Summarize documents (.pdf/.docx/.txt/.csv/.xls[x])\n"
+            "→ Mention me for AI help\n"
+            "→ Burst protection queuing"
+        ),
+        inline=False
+    )
     embed.set_footer(text="💡 Drop any link for AI analysis • Upload docs for instant summary")
     embed.timestamp = datetime.datetime.utcnow()
     return embed
@@ -273,6 +295,21 @@ async def safe_send(target, content=None, embed=None, ephemeral=False, view=None
             return await target.followup.send(ephemeral=ephemeral, **kwargs)
     except Exception as e:
         logger.error(f"Send failed: {e}")
+    return None
+
+
+async def shorten_link(url: str) -> Optional[str]:
+    try:
+        safe_url = urllib.parse.quote(url, safe=":/?#[]@!$&'()*+,;=")
+        api = f"http://tinyurl.com/api-create.php?url={safe_url}"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(api, timeout=8) as resp:
+                if resp.status == 200:
+                    short = (await resp.text()).strip()
+                    if short.startswith("http"):
+                        return short
+    except Exception as e:
+        logger.debug(f"shorten_link error: {e}")
     return None
 
 
@@ -805,8 +842,8 @@ class LinkActionView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="Save", style=discord.ButtonStyle.green, emoji="💾")
-    async def save_button(self, interaction, button):
+    @discord.ui.button(label="Save now", style=discord.ButtonStyle.success, emoji="💾")
+    async def save_now(self, interaction, button):
         if getattr(self, "_done", False):
             await ack_interaction(interaction, ephemeral=True)
             return
@@ -833,20 +870,49 @@ class LinkActionView(discord.ui.View):
             except Exception:
                 pass
 
-    @discord.ui.button(label="Ignore", style=discord.ButtonStyle.secondary, emoji="👋")
-    async def ignore_button(self, interaction, button):
-        if getattr(self, "_done", False):
-            await ack_interaction(interaction, ephemeral=True)
-            return
-        self._done = True
+    @discord.ui.button(label="Save later", style=discord.ButtonStyle.primary, emoji="🕒")
+    async def save_later(self, interaction, button):
         await ack_interaction(interaction, ephemeral=True)
-        confirm_view = ConfirmDeleteView(self.link, self.author_id, self.original_message, self.pending_db_id, interaction.message.id, self.cog)
+        await safe_send(interaction.followup, content="🕒 Saved for later review. Use `/pendinglinks` to process.", ephemeral=True)
+
+    @discord.ui.button(label="Shorten link", style=discord.ButtonStyle.secondary, emoji="🔗")
+    async def shorten_btn(self, interaction, button):
+        await ack_interaction(interaction, ephemeral=True)
+        short = await shorten_link(self.link)
+        if short:
+            await safe_send(interaction.followup, content=f"📎 Shortened link:\n{short}", ephemeral=True)
+        else:
+            await safe_send(interaction.followup, content=error_message("Could not shorten link. Try again later."), ephemeral=True)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, emoji="❌")
+    async def cancel_btn(self, interaction, button):
+        await ack_interaction(interaction, ephemeral=True)
         try:
-            await interaction.message.edit(view=confirm_view)
-            await safe_send(interaction.followup, content="Are you sure you want to delete this link?", ephemeral=True, view=None)
+            if self.original_message:
+                try:
+                    await self.original_message.delete()
+                except Exception:
+                    pass
+            try:
+                await asyncio.to_thread(storage.delete_pending_link_by_id, self.pending_db_id)
+            except Exception as e:
+                logger.error(f"Pending delete failed: {e}")
+            if interaction.message.id in self.cog.pending_links:
+                del self.cog.pending_links[interaction.message.id]
+            gid = interaction.guild.id if interaction.guild else None
+            if gid in self.cog.guild_pending_counts and self.cog.guild_pending_counts[gid] > 0:
+                self.cog.guild_pending_counts[gid] -= 1
+            try:
+                await interaction.message.delete()
+            except Exception:
+                pass
+            await safe_send(interaction.followup, content="❌ Prompt removed.", ephemeral=True)
         except Exception as e:
-            logger.error(f"Ignore->confirm view failed: {e}")
-            await safe_send(interaction.followup, content=error_message("Could not open confirmation. Please try again."), ephemeral=True)
+            logger.error(f"Cancel failed: {e}")
+            await safe_send(interaction.followup, content=error_message("Could not cancel."), ephemeral=True)
+        finally:
+            for child in self.children:
+                child.disabled = True
 
 
 class MultiLinkSelectView(discord.ui.View):
@@ -1143,10 +1209,9 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
         lines = guidance.splitlines()
         verdict_line = lines[0] if lines else "Keep/Skip"
         reason_line = lines[1] if len(lines) > 1 else "No reason provided."
-        verdict_msg = verdict_message(link, verdict_line, reason_line, author_mention=interaction.user.mention)
         preview = await link_preview(link)
-        verdict_msg = f"{verdict_msg}\n{preview}"
-        await safe_send(interaction.followup, content=verdict_msg, ephemeral=True)
+        embed = make_verdict_embed(link, verdict_line, reason_line, preview)
+        await safe_send(interaction.followup, embed=embed, ephemeral=True)
 
     # ----------------- Core logic -----------------
 
@@ -1488,11 +1553,10 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                     lines = guidance.splitlines()
                     verdict_line = lines[0] if lines else "Keep/Skip"
                     reason_line = lines[1] if len(lines) > 1 else "No reason provided."
-                    verdict_msg = verdict_message(link, verdict_line, reason_line, author_mention=message.author.mention)
                     preview = await link_preview(link)
-                    verdict_msg = f"{verdict_msg}\n{preview}"
+                    embed = make_verdict_embed(link, verdict_line, reason_line, preview)
                     view = LinkActionView(link, message.author.id, message, pending_id, self, ai_verdict=guidance)
-                    ask_msg = await safe_send(message.channel, content=verdict_msg, view=view)
+                    ask_msg = await safe_send(message.channel, embed=embed, view=view)
                     if pending_id:
                         try:
                             await asyncio.to_thread(storage.update_pending_with_bot_msg_id, pending_id, getattr(ask_msg, "id", None))
@@ -1596,11 +1660,10 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                 lines = guidance.splitlines()
                 verdict_line = lines[0] if lines else "Keep/Skip"
                 reason_line = lines[1] if len(lines) > 1 else "No reason provided."
-                verdict_msg = verdict_message(link, verdict_line, reason_line, author_mention=ctx.author.mention)
                 preview = await link_preview(link)
-                verdict_msg = f"{verdict_msg}\n{preview}"
+                embed = make_verdict_embed(link, verdict_line, reason_line, preview)
                 view = LinkActionView(link, ctx.author.id, orig_msg, pending_id, self, ai_verdict=guidance)
-                ask_msg = await safe_send(ctx, content=verdict_msg, view=view)
+                ask_msg = await safe_send(ctx, embed=embed, view=view)
                 if pending_id:
                     try:
                         await asyncio.to_thread(storage.update_pending_with_bot_msg_id, pending_id, getattr(ask_msg, "id", None))
@@ -1624,11 +1687,10 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                 lines = guidance.splitlines()
                 verdict_line = lines[0] if lines else "Keep/Skip"
                 reason_line = lines[1] if len(lines) > 1 else "No reason provided."
-                verdict_msg = verdict_message(link, verdict_line, reason_line, author_mention=ctx.author.mention)
                 preview = await link_preview(link)
-                verdict_msg = f"{verdict_msg}\n{preview}"
+                embed = make_verdict_embed(link, verdict_line, reason_line, preview)
                 view = LinkActionView(link, ctx.author.id, orig_msg, pending_id, self, ai_verdict=guidance)
-                ask_msg = await safe_send(ctx, content=verdict_msg, view=view)
+                ask_msg = await safe_send(ctx, embed=embed, view=view)
                 if pending_id:
                     try:
                         await asyncio.to_thread(storage.update_pending_with_bot_msg_id, pending_id, getattr(ask_msg, "id", None))
@@ -1829,10 +1891,9 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
             lines = guidance.splitlines()
             verdict_line = lines[0] if lines else "Keep/Skip"
             reason_line = lines[1] if len(lines) > 1 else "No reason provided."
-            verdict_msg = verdict_message(url, verdict_line, reason_line, author_mention=ctx.author.mention)
             preview = await link_preview(url)
-            verdict_msg = f"{verdict_msg}\n{preview}"
-            await safe_send(ctx, content=verdict_msg)
+            embed = make_verdict_embed(url, verdict_line, reason_line, preview)
+            await safe_send(ctx, embed=embed)
 
     @commands.hybrid_command(name="stats", description="Show link stats")
     async def show_stats(self, ctx: commands.Context):
