@@ -970,7 +970,6 @@ class MultiLinkSelectView(discord.ui.View):
             custom_id="link_selector"
         )
         self.add_item(select)
-
     async def interaction_check(self, interaction):
         if interaction.user.id != self.author_id:
             await safe_send(interaction.response, content=error_message("Not your selection."), ephemeral=True)
@@ -989,11 +988,10 @@ class MultiLinkSelectView(discord.ui.View):
                 try:
                     if self.message:
                         await self.message.edit(view=self)
-                    except Exception:
-                        pass
+                except Exception:
+                    pass
             return False
         return True
-
 
 class ConfirmMultiLinkView(discord.ui.View):
     def __init__(self, links: list, selected_indices: set, author_id: int, original_message, cog):
