@@ -1503,7 +1503,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                     return
                 prefix = await self._get_preferred_prefix(message)
                 welcome = (
-                    f"👋 **Welcome to Digital Labour**\n\n"
+                    f"👋 **Welcome to `{guild.name}`**\n\n"
                     f"I help save links, summarize docs, and guide students.\n"
                     f"Prefix: `{prefix}` or use slash commands.\n"
                     f"Try: drop a link or type `/help`."
