@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Digital Labour - main.py
+Link Manager - main.py
 Features: embed UI, 4-button link actions, link shortening, multi-guild scoping,
 exports (CSV/PDF placeholder), expiry/archiving with background sweeper,
 context menus at top-level, document summarization, AI link verdicts.
@@ -112,7 +112,7 @@ def _has_model(client, model_name: str) -> bool:
 
 if GEMINI_API_KEY and genai is not None:
     ai_client = genai.Client(api_key=GEMINI_API_KEY)
-    AI_ENABLED = bool(_has_model(ai_client, "gemini-1.5-flash"))
+    AI_ENABLED = bool(_has_model(ai_client, "gemini-1.5-pro"))
     if AI_ENABLED:
         logger.info("✅ Google Gemini AI enabled")
     else:
@@ -239,7 +239,7 @@ async def get_ai_guidance(url: str) -> str:
     try:
         response = await asyncio.to_thread(
             ai_client.models.generate_content,
-            model="gemini-1.5-flash",
+            model="gemini-1.5-pro",
             contents=prompt,
             config={"max_output_tokens": 500, "temperature": 0.3}
         )
@@ -257,7 +257,7 @@ async def ai_call(prompt: str, max_retries: int = 3, timeout: float = 10.0) -> s
         try:
             response = await asyncio.to_thread(
                 ai_client.models.generate_content,
-                model="gemini-1.5-flash",
+                model="gemini-1.5-pro",
                 contents=prompt,
                 config={"max_output_tokens": AI_PROMPT_LIMIT, "temperature": 0.7}
             )
@@ -320,9 +320,9 @@ def make_cyberpunk_help_embed() -> discord.Embed:
     embed = discord.Embed(title="", description="", color=0x00FF9C)
     embed.description = """```ansi
 ╔═══════════════════════════════════════════════╗
-║  🤖 DIGITAL LABOUR BOT v3.0                   ║
+║  🤖 LINK MANAGER BOT v3.0                     ║
 ╚═══════════════════════════════════════════════╝
->_[0m [1;37mLABOUR BOT v3.0[0m [2;33m// NEURAL LINK MANAGER[0m
+>_[0m [1;37mLINK MANAGER v3.0[0m [2;33m// NEURAL LINK MANAGER[0m
 [2;35m>_[0m [2;37mStatus:[0m [1;32m[ONLINE][0m [2;33m// Session:  ACTIVE[0m
 ```"""
     embed.add_field(
@@ -382,7 +382,7 @@ def make_cyberpunk_help_embed() -> discord.Embed:
 [2;35m║[0m ⚡ Drop a link → AI verdict → Save/Ignore      [2;35m║[0m
 [2;35m║[0m ⚡ Upload document → Click summarize button    [2;35m║[0m
 [2;36m╚═══════════════════════════════════════════════╝[0m
-[2;33m>_[0m Powered by Gemini AI // Made for Digital Labour
+[2;33m>_[0m Powered by Gemini AI // Made for Link Management
 ```""",
         inline=False,
     )
@@ -393,7 +393,7 @@ def make_cyberpunk_help_embed() -> discord.Embed:
 
 def make_compact_help_embed() -> discord.Embed:
     embed = discord.Embed(
-        title="⚡ LABOUR BOT // COMMAND INDEX",
+        title="⚡ LINK MANAGER // COMMAND INDEX",
         description="`Neural Link Manager v3.0`",
         color=0x5865F2
     )
@@ -1503,7 +1503,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                     return
                 prefix = await self._get_preferred_prefix(message)
                 welcome = (
-                    f"👋 **Welcome to `{guild.name}`**\n\n"
+                    f"👋 **Welcome to Link Manager**\n\n"
                     f"I help save links, summarize docs, and guide students.\n"
                     f"Prefix: `{prefix}` or use slash commands.\n"
                     f"Try: drop a link or type `/help`."
@@ -2111,9 +2111,9 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
 async def on_ready():
     ready_banner = f"""
 ╔═══════════════════════════════════════════════╗
-║  🤖 DIGITAL LABOUR BOT ONLINE                 ║
+║  🤖 LINK MANAGER BOT ONLINE                    ║
 ╚═══════════════════════════════════════════════╝
->_[0m [1;37mLABOUR BOT v3.0[0m [2;33m// NEURAL LINK MANAGER[0m
+>_[0m [1;37mLINK MANAGER v3.0[0m [2;33m// NEURAL LINK MANAGER[0m
 [2;35m>_[0m [2;37mStatus:[0m [1;32m[ONLINE][0m [2;33m// Session:  ACTIVE[0m
 ╚═══════════════════════════════════════════════╝
 """
@@ -2138,7 +2138,7 @@ async def main():
     token = os.getenv("DISCORD_TOKEN")
     if not token:
         raise ValueError("DISCORD_TOKEN not set!")
-    logger.info("Starting Labour Bot...")
+    logger.info("Starting Link Manager Bot...")
     async with bot:
         await bot.start(token)
 
