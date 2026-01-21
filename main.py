@@ -39,6 +39,44 @@ except Exception:
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 
+class GuildConfig:
+    def __init__(self):
+        self.configs = {}
+        self.path = "guild_configs.json"
+        self.load_all()
+
+    def load_all(self):
+        try:
+            with open(self.path, "r", encoding="utf-8") as f:
+                self.configs = json.load(f)
+        except FileNotFoundError:
+            self.configs = {}
+        except Exception as e:
+            logger.error(f"Failed to load guild configs: {e}")
+            self.configs = {}
+
+    def save_all(self):
+        try:
+            with open(self.path, "w", encoding="utf-8") as f:
+                json.dump(self.configs, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"Failed to save guild configs: {e}")
+
+    def load(self, gid):
+        return self.configs.get(str(gid), {})
+
+    def save(self, gid, cfg):
+        self.configs[str(gid)] = cfg
+        self.save_all()
+
+    def get_value(self, gid, key, default):
+        cfg = self.load(gid)
+        return cfg.get(key, default)
+
+
+guild_config = GuildConfig()
+
+
 def _has_model(client, model_name: str) -> bool:
     try:
         return hasattr(client, "models") and hasattr(client.models, "generate_content")
@@ -148,6 +186,66 @@ async def link_preview(url: str) -> str:
         return "🔗 Preview unavailable."
 
 
+async def download_bytes(url: str) -> Optional[bytes]:
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                if resp.status == 200:
+                    content_type = resp.headers.get('Content-Type', '')
+                    if any(ct in content_type for ct in ALLOWED_CONTENT_TYPES):
+                        data = await resp.read()
+                        if len(data) <= MAX_DOWNLOAD_BYTES:
+                            return data
+    except Exception as e:
+        logger.debug(f"download_bytes error: {e}")
+    return None
+
+
+async def ai_call(prompt: str, max_retries: int = 3, timeout: float = 10.0) -> str:
+    if not AI_ENABLED or not ai_client:
+        return "AI is disabled or unavailable."
+    for attempt in range(max_retries):
+        try:
+            response = await asyncio.to_thread(
+                ai_client.models.generate_content,
+                model="gemini-2.0-flash-exp",
+                contents=prompt,
+                config={"max_output_tokens": AI_PROMPT_LIMIT, "temperature": 0.7}
+            )
+            if response and response.text:
+                return response.text.strip()
+        except Exception as e:
+            logger.error(f"ai_call attempt {attempt+1} error: {e}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(1)
+    return "AI call failed after retries."
+
+
+async def ai_server_audit(guild, topic: str, extra_context: str = "") -> str:
+    if not guild:
+        return "No guild information available."
+    server_info = f"Server Name: {guild.name}, Members: {guild.member_count}, Channels: {len(guild.channels)}"
+    prompt = f"Audit the Discord server for the topic '{topic}'. {server_info}. {extra_context}. Provide a detailed, constructive analysis."
+    return await ai_call(prompt, max_retries=3, timeout=15.0)
+
+
+async def ai_improve_rules(rules_text: str, server_summary: str) -> str:
+    prompt = f"Improve these server rules: '{rules_text}'. Server summary: {server_summary}. Provide better, clearer rules with explanations."
+    return await ai_call(prompt)
+
+
+async def ai_avatar_advice(desired_tone: str) -> str:
+    prompt = f"Suggest professional avatar ideas for a Discord user with tone: {desired_tone}. Provide 5-7 suggestions with descriptions."
+    return await ai_call(prompt)
+
+
+async def ai_channel_suggestions(guild, focus: str) -> str:
+    if not guild:
+        return "No guild information."
+    prompt = f"Suggest new channels for Discord server '{guild.name}' with focus on: {focus}. List 5-10 channel names with descriptions."
+    return await ai_call(prompt)
+
+
 async def ack_interaction(interaction: discord.Interaction, *, ephemeral: bool = True):
     try:
         if not interaction.response.is_done():
@@ -172,15 +270,10 @@ def make_verdict_embed(link: str, verdict_line: str, reason_line: str, preview: 
 def make_cyberpunk_help_embed() -> discord.Embed:
     embed = discord.Embed(title="", description="", color=0x00FF9C)
     embed.description = """```ansi
-[2;36m╔═══════════════════════════════════════════════╗[0m
-[2;35m║[0m  [1;36m▓█████▄  ██▓  ▄████  ██▓▄▄▄█████▓ ▄▄▄       ██▓    [0m [2;35m║[0m
-[2;35m║[0m  [1;36m▒██▀ ██▌▓██▒ ██▒ ▀█▒▓██▒▓  ██▒ ▓▒▒████▄    ▓██▒    [0m [2;35m║[0m
-[2;35m║[0m  [1;35m░██   █▌▒██▒▒██░▄▄▄░▒██▒▒ ▓██░ ▒░▒██▄▀█▄  ▒██░    [0m [2;35m║[0m
-[2;35m║[0m  [1;35m░▓█▄   ▌░██░░▓█  ██▓░██░░ ▓██▓ ░ ░██▄▄▄▄██ ▒██░    [0m [2;35m║[0m
-[2;35m║[0m  [1;33m░▒████▓ ░██░░▒▓███▀▒░██░  ▒██▒ ░  ▓█   ▓██���░██████▒[0m [2;35m║[0m
-[2;35m║[0m  [1;33m ▒▒▓  ▒ ░▓   ░▒   ▒ ░▓    ▒ ░░    ▒▒   ▓▒█░░ ▒░▓  ░[0m [2;35m║[0m
-[2;36m╚═══════════════════════════════════════════════╝[0m
-[1;32m>_[0m [1;37mLABOUR BOT v3.0[0m [2;33m// NEURAL LINK MANAGER[0m
+╔═══════════════════════════════════════════════╗
+║  🤖 DIGITAL LABOUR BOT v3.0                   ║
+╚═══════════════════════════════════════════════╝
+>_[0m [1;37mLABOUR BOT v3.0[0m [2;33m// NEURAL LINK MANAGER[0m
 [2;35m>_[0m [2;37mStatus:[0m [1;32m[ONLINE][0m [2;33m// Session:  ACTIVE[0m
 ```"""
     embed.add_field(
@@ -199,7 +292,7 @@ def make_cyberpunk_help_embed() -> discord.Embed:
     embed.add_field(
         name="\u200b",
         value="""```ansi
-[1;35m┌─[0m [1;37mANALYSIS_MODULES[0m [1;35m────���────────────────────────────┐[0m
+[1;35m┌─[0m [1;37mANALYSIS_MODULES[0m [1;35m────────────────────────────┐[0m
 [1;32m│ ▸[0m [1;33m/analyze[0m <url>
 [1;32m│ ▸[0m [1;33m/searchlinks[0m <term>
 [1;32m│ ▸[0m [1;33m/stats[0m
@@ -239,7 +332,7 @@ def make_cyberpunk_help_embed() -> discord.Embed:
 [2;35m║[0m ⚡ TIP: Mention me + question for AI help      [2;35m║[0m
 [2;35m║[0m ⚡ Drop a link → AI verdict → Save/Ignore      [2;35m║[0m
 [2;35m║[0m ⚡ Upload document → Click summarize button    [2;35m║[0m
-[2;35m╚═══════════════════════════════════════════════╝[0m
+[2;36m╚═══════════════════════════════════════════════╝[0m
 [2;33m>_[0m Powered by Gemini AI // Made for Digital Labour
 ```""",
         inline=False,
@@ -261,7 +354,7 @@ def make_compact_help_embed() -> discord.Embed:
         inline=False
     )
     embed.add_field(
-        name="��� Analysis & Search",
+        name="🔍 Analysis & Search",
         value="`/analyze` • `/searchlinks` • `/stats` • `/recent`",
         inline=False
     )
@@ -698,7 +791,6 @@ class DisclaimerView(discord.ui.View):
         self.author_id = author_id
         self.original_message = original_message
         self.cog = cog
-        self.message = None
 
     async def interaction_check(self, interaction):
         if interaction.user.id != self.author_id:
@@ -904,7 +996,7 @@ class ConfirmMultiLinkView(discord.ui.View):
                     interaction.channel,
                     content=(
                         f"{interaction.user.mention}, link {saved_count} saved to queue!\n"
-                        f"Use `!category <name>` to save or `!cancel` to skip.\n"
+                        "Use `!category <name>` to save or `!cancel` to skip.\n"
                         f"`{link[:100]}{'...' if len(link) > 100 else ''}`"
                     )
                 )
@@ -1464,7 +1556,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                             {"link": link, "original_message": message, "timestamp": now, "pending_db_id": pending_id}
                         )
                         try:
-                            await message.add_reaction("��️")
+                            await message.add_reaction("🗂️")
                         except Exception:
                             pass
                         continue
@@ -1966,11 +2058,8 @@ async def on_ready():
 ╔═══════════════════════════════════════════════╗
 ║  🤖 DIGITAL LABOUR BOT ONLINE                 ║
 ╚═══════════════════════════════════════════════╝
->_ User: {bot.user} (ID: {bot.user.id})
->_ PID: {os.getpid()}
->_ Session: {SESSION_ID[:8]}
->_ AI:  {'ENABLED ✅' if AI_ENABLED else 'DISABLED ⚠️'}
->_ Guilds: {len(bot.guilds)}
+>_[0m [1;37mLABOUR BOT v3.0[0m [2;33m// NEURAL LINK MANAGER[0m
+[2;35m>_[0m [2;37mStatus:[0m [1;32m[ONLINE][0m [2;33m// Session:  ACTIVE[0m
 ╚═══════════════════════════════════════════════╝
 """
     logger.info(ready_banner)
