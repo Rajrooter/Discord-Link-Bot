@@ -27,6 +27,32 @@ from dotenv import load_dotenv
 import storage
 from utils import logger, is_valid_url, RateLimiter, EventCleanup
 
+# Optional imports for document processing
+try:
+    from bs4 import BeautifulSoup
+except ImportError:
+    BeautifulSoup = None
+
+try:
+    import docx
+except ImportError:
+    docx = None
+
+try:
+    from PyPDF2 import PdfReader
+except ImportError:
+    PdfReader = None
+
+try:
+    import striprtf
+except ImportError:
+    striprtf = None
+
+try:
+    import pandas as pd
+except ImportError:
+    pd = None
+
 SESSION_ID = str(uuid.uuid4())
 load_dotenv()
 
@@ -86,7 +112,7 @@ def _has_model(client, model_name: str) -> bool:
 
 if GEMINI_API_KEY and genai is not None:
     ai_client = genai.Client(api_key=GEMINI_API_KEY)
-    AI_ENABLED = bool(_has_model(ai_client, "gemini-2.0-flash-exp"))
+    AI_ENABLED = bool(_has_model(ai_client, "gemini-1.5-flash"))
     if AI_ENABLED:
         logger.info("✅ Google Gemini AI enabled")
     else:
@@ -201,6 +227,29 @@ async def download_bytes(url: str) -> Optional[bytes]:
     return None
 
 
+async def get_ai_guidance(url: str) -> str:
+    if not AI_ENABLED or not ai_client:
+        return "AI is disabled or unavailable. Please configure GEMINI_API_KEY."
+    prompt = (
+        "You are an educational assistant and security specialist. Evaluate if a URL is vital for study purposes. "
+        "ALSO, check if the link looks like spam, phishing, or malicious content. Provide a concise 1-2 sentence recommendation. "
+        "If it looks dangerous, warn the user explicitly and advise NOT to save or click it. Focus on both educational value and user safety. "
+        f"URL: {url}"
+    )
+    try:
+        response = await asyncio.to_thread(
+            ai_client.models.generate_content,
+            model="gemini-1.5-flash",
+            contents=prompt,
+            config={"max_output_tokens": 500, "temperature": 0.3}
+        )
+        if response and response.text:
+            return response.text.strip()
+    except Exception as e:
+        logger.error(f"get_ai_guidance error: {e}")
+    return "AI call failed. Unable to provide guidance."
+
+
 async def ai_call(prompt: str, max_retries: int = 3, timeout: float = 10.0) -> str:
     if not AI_ENABLED or not ai_client:
         return "AI is disabled or unavailable."
@@ -208,7 +257,7 @@ async def ai_call(prompt: str, max_retries: int = 3, timeout: float = 10.0) -> s
         try:
             response = await asyncio.to_thread(
                 ai_client.models.generate_content,
-                model="gemini-2.0-flash-exp",
+                model="gemini-1.5-flash",
                 contents=prompt,
                 config={"max_output_tokens": AI_PROMPT_LIMIT, "temperature": 0.7}
             )
@@ -447,8 +496,9 @@ async def shorten_link(url: str) -> Optional[str]:
 
 
 def excel_preview_table(data: bytes, filename: str, max_rows: int = 5) -> Optional[str]:
+    if pd is None:
+        return None
     try:
-        import pandas as pd
         ext = os.path.splitext(filename.lower())[1]
         if ext == ".csv":
             df = pd.read_csv(io.BytesIO(data))
@@ -467,8 +517,9 @@ def extract_text_from_bytes(filename: str, data: bytes) -> Optional[str]:
     try:
         ext = os.path.splitext(name)[1]
         if ext in EXCEL_TYPES:
+            if pd is None:
+                return None
             try:
-                import pandas as pd
                 if ext == ".csv":
                     df = pd.read_csv(io.BytesIO(data))
                 else:
@@ -490,8 +541,9 @@ def extract_text_from_bytes(filename: str, data: bytes) -> Optional[str]:
             except Exception:
                 return data.decode("latin-1", errors="replace")
         if name.endswith(".pdf"):
+            if PdfReader is None:
+                return None
             try:
-                from PyPDF2 import PdfReader
                 with io.BytesIO(data) as bio:
                     reader = PdfReader(bio)
                     pages = [p.extract_text() or "" for p in reader.pages]
@@ -500,8 +552,9 @@ def extract_text_from_bytes(filename: str, data: bytes) -> Optional[str]:
                 logger.debug(f"PDF extraction error: {e}")
                 return None
         if name.endswith(".docx"):
+            if docx is None:
+                return None
             try:
-                import docx
                 with io.BytesIO(data) as bio:
                     doc = docx.Document(bio)
                     return "\n".join(p.text for p in doc.paragraphs)
@@ -509,16 +562,18 @@ def extract_text_from_bytes(filename: str, data: bytes) -> Optional[str]:
                 logger.debug(f"DOCX extraction error: {e}")
                 return None
         if name.endswith((".html", ".htm", ".xhtml", ".asp", ".aspx")):
+            if BeautifulSoup is None:
+                return None
             try:
-                from bs4 import BeautifulSoup
                 soup = BeautifulSoup(data, "html.parser")
                 return soup.get_text(" ", strip=True)
             except Exception as e:
                 logger.debug(f"HTML extraction error: {e}")
                 return None
         if name.endswith(".rtf"):
+            if striprtf is None:
+                return None
             try:
-                import striprtf
                 return striprtf.rtf_to_text(data.decode("latin-1", errors="ignore"))
             except Exception as e:
                 logger.debug(f"RTF extraction error: {e}")
@@ -531,7 +586,7 @@ def extract_text_from_bytes(filename: str, data: bytes) -> Optional[str]:
 async def summarize_document_bytes(filename: str, data: bytes, context_note: str = "") -> str:
     text = extract_text_from_bytes(filename, data)
     if not text:
-        return "⚠️ Couldn't extract text. For PDF/DOCX ensure PyPDF2 and python-docx are installed or provide a .txt version."
+        return "⚠️ Couldn't extract text. Ensure required libraries are installed (PyPDF2, python-docx, beautifulsoup4, pandas, striprtf) or provide a .txt version."
     excerpt = text[:40000]
     prompt = (
         "Summarize in <=10 lines. Be clear, kid-friendly, concise.\n"
