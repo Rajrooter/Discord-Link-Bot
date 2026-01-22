@@ -15,6 +15,7 @@ import time
 import uuid
 import urllib.parse
 import csv
+import json
 from typing import Optional, List, Dict, Callable, Awaitable
 from urllib.parse import urlparse
 
@@ -239,7 +240,7 @@ async def get_ai_guidance(url: str) -> str:
     try:
         response = await asyncio.to_thread(
             ai_client.models.generate_content,
-            model="gemini-1.5-pro",
+            model="gemini-2.0-flash",  # Updated model name
             contents=prompt,
             config={"max_output_tokens": 500, "temperature": 0.3}
         )
@@ -249,7 +250,6 @@ async def get_ai_guidance(url: str) -> str:
         logger.error(f"get_ai_guidance error: {e}")
     return "AI call failed. Unable to provide guidance."
 
-
 async def ai_call(prompt: str, max_retries: int = 3, timeout: float = 10.0) -> str:
     if not AI_ENABLED or not ai_client:
         return "AI is disabled or unavailable."
@@ -257,7 +257,7 @@ async def ai_call(prompt: str, max_retries: int = 3, timeout: float = 10.0) -> s
         try:
             response = await asyncio.to_thread(
                 ai_client.models.generate_content,
-                model="gemini-1.5-pro",
+                model="gemini-2.0-flash",  # Updated model name
                 contents=prompt,
                 config={"max_output_tokens": AI_PROMPT_LIMIT, "temperature": 0.7}
             )
@@ -268,7 +268,6 @@ async def ai_call(prompt: str, max_retries: int = 3, timeout: float = 10.0) -> s
             if attempt < max_retries - 1:
                 await asyncio.sleep(1)
     return "AI call failed after retries."
-
 
 async def ai_server_audit(guild, topic: str, extra_context: str = "") -> str:
     if not guild:
