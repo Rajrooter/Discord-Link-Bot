@@ -25,7 +25,7 @@ from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 from flask import Flask
-from threading import Thread
+from threading import Thread, Lock
 
 import storage
 from utils import logger, is_valid_url, RateLimiter, EventCleanup
@@ -71,24 +71,27 @@ class GuildConfig:
     def __init__(self):
         self.configs = {}
         self.path = "guild_configs.json"
+        self._lock = Lock()
         self.load_all()
 
     def load_all(self):
-        try:
-            with open(self.path, "r", encoding="utf-8") as f:
-                self.configs = json.load(f)
-        except FileNotFoundError:
-            self.configs = {}
-        except Exception as e:
-            logger.error(f"Failed to load guild configs: {e}")
-            self.configs = {}
+        with self._lock:
+            try:
+                with open(self.path, "r", encoding="utf-8") as f:
+                    self.configs = json.load(f)
+            except FileNotFoundError:
+                self.configs = {}
+            except Exception as e:
+                logger.error(f"Failed to load guild configs: {e}")
+                self.configs = {}
 
     def save_all(self):
-        try:
-            with open(self.path, "w", encoding="utf-8") as f:
-                json.dump(self.configs, f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            logger.error(f"Failed to save guild configs: {e}")
+        with self._lock:
+            try:
+                with open(self.path, "w", encoding="utf-8") as f:
+                    json.dump(self.configs, f, indent=2, ensure_ascii=False)
+            except Exception as e:
+                logger.error(f"Failed to save guild configs: {e}")
 
     def load(self, gid):
         return self.configs.get(str(gid), {})
@@ -137,7 +140,7 @@ AI_PROMPT_LIMIT = 12000
 
 RULES_FILE = "server_rules.txt"
 
-URL_REGEX = r'(?:(?:https?://)|www\.)\S+'
+URL_REGEX = r'(?:https?://)\S+'
 IGNORED_EXTENSIONS = ['.gif', '.png', '.jpg', '.jpeg', '.webp', '.bmp', '.mp4', '.mov', '.avi']
 
 COMMUNITY_LEARNING_URL = os.environ.get("COMMUNITY_LEARNING_URL", "https://share.google/yf57dJNzEyAVM0asz")
@@ -159,7 +162,11 @@ EXCEL_TYPES = {".xls", ".xlsx", ".xlsm", ".xlsb", ".xlt", ".xltx", ".csv"}
 HTML_TYPES = {".html", ".htm", ".xhtml", ".asp", ".aspx"}
 TEXTISH_TYPES = {".txt", ".rtf", ".doc", ".docx", ".wps", ".csv"}
 
-SECURITY_ALERT_CHANNEL_ID = int(os.environ.get("SECURITY_ALERT_CHANNEL_ID", "0") or 0)
+try:
+    SECURITY_ALERT_CHANNEL_ID = int(os.environ.get("SECURITY_ALERT_CHANNEL_ID", "0") or 0)
+except ValueError:
+    SECURITY_ALERT_CHANNEL_ID = 0
+    logger.warning("SECURITY_ALERT_CHANNEL_ID must be an integer; defaulting to 0.")
 
 
 # ---------------------------------------------------------------------------
@@ -220,7 +227,7 @@ async def download_bytes(url: str) -> Optional[bytes]:
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
                 if resp.status == 200:
                     content_type = resp.headers.get('Content-Type', '')
-                    if any(ct in content_type for ct in ALLOWED_CONTENT_TYPES):
+                    if (not content_type) or any(ct in content_type for ct in ALLOWED_CONTENT_TYPES):
                         data = await resp.read()
                         if len(data) <= MAX_DOWNLOAD_BYTES:
                             return data
@@ -251,16 +258,20 @@ async def get_ai_guidance(url: str) -> str:
         logger.error(f"get_ai_guidance error: {e}")
     return "AI call failed. Unable to provide guidance."
 
+
 async def ai_call(prompt: str, max_retries: int = 3, timeout: float = 10.0) -> str:
     if not AI_ENABLED or not ai_client:
         return "AI is disabled or unavailable."
     for attempt in range(max_retries):
         try:
-            response = await asyncio.to_thread(
-                ai_client.models.generate_content,
-                model="gemini-2.0-flash",  # Updated model name
-                contents=prompt,
-                config={"max_output_tokens": AI_PROMPT_LIMIT, "temperature": 0.7}
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    ai_client.models.generate_content,
+                    model="gemini-2.0-flash",  # Updated model name
+                    contents=prompt,
+                    config={"max_output_tokens": AI_PROMPT_LIMIT, "temperature": 0.7}
+                ),
+                timeout=timeout,
             )
             if response and response.text:
                 return response.text.strip()
@@ -269,6 +280,7 @@ async def ai_call(prompt: str, max_retries: int = 3, timeout: float = 10.0) -> s
             if attempt < max_retries - 1:
                 await asyncio.sleep(1)
     return "AI call failed after retries."
+
 
 async def ai_server_audit(guild, topic: str, extra_context: str = "") -> str:
     if not guild:
@@ -314,9 +326,7 @@ def make_verdict_embed(link: str, verdict_line: str, reason_line: str, preview: 
         embed.add_field(name="Preview", value=preview, inline=False)
     embed.set_footer(text="Choose: Save now • Save later • Shorten • Cancel")
     return embed
-
-
-def make_cyberpunk_help_embed() -> discord.Embed:
+    def make_cyberpunk_help_embed() -> discord.Embed:
     embed = discord.Embed(title="", description="", color=0x00FF9C)
     embed.description = """```ansi
 ╔═══════════════════════════════════════════════╗
@@ -963,9 +973,7 @@ class LinkActionView(discord.ui.View):
         finally:
             for child in self.children:
                 child.disabled = True
-
-
-class MultiLinkSelectView(discord.ui.View):
+                class MultiLinkSelectView(discord.ui.View):
     def __init__(self, links: list, author_id: int, original_message, cog):
         super().__init__(timeout=300)
         self.links = links
@@ -1233,8 +1241,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                 break
             except Exception as e:
                 logger.error(f"archiver loop error: {e}")
-
-    async def handle_summarize_preview_ctx(self, interaction: discord.Interaction, message: discord.Message):
+                    async def handle_summarize_preview_ctx(self, interaction: discord.Interaction, message: discord.Message):
         await ack_interaction(interaction, ephemeral=True)
         file_url, filename = None, None
         for att in message.attachments:
@@ -1541,8 +1548,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
                         view.message = prompt_msg
         except Exception:
             logger.debug("file summarize trigger error", exc_info=True)
-
-        if urls:
+                    if urls:
             non_media_links = [link for link in urls if not is_media_url(link) and is_valid_url(link)]
             if len(non_media_links) > 1:
                 if len(non_media_links) > 25:
@@ -1869,8 +1875,7 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
         except Exception as e:
             logger.error(f"assign_category failed: {e}")
             await safe_send(ctx, content=error_message("Failed to save the link. Please try again."))
-
-    @commands.hybrid_command(name="cancel", description="Cancel saving a pending link")
+                @commands.hybrid_command(name="cancel", description="Cancel saving a pending link")
     async def cancel_save(self, ctx: commands.Context):
         if ctx.author.id in self.links_to_categorize:
             del self.links_to_categorize[ctx.author.id]
@@ -2113,12 +2118,13 @@ def home():
 
 def run():
     port = int(os.environ.get("PORT", "8080"))
+    logger.info(f"Keep-alive server starting on port {port}")
     app.run(host='0.0.0.0', port=port)
 
 def keep_alive():
     t = Thread(target=run, daemon=True)
     t.start()
-keep_alive()
+
 @bot.event
 async def on_ready():
     ready_banner = f"""
@@ -2157,6 +2163,8 @@ async def main():
 
 if __name__ == "__main__":
     try:
+        keep_alive()
         asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
+        
