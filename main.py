@@ -195,9 +195,19 @@ async def link_preview(url: str) -> str:
 
 async def download_bytes(url: str) -> Optional[bytes]:
     try:
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"}:
+            return None
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
                 if resp.status == 200:
+                    content_length = resp.headers.get("Content-Length")
+                    if content_length:
+                        try:
+                            if int(content_length) > MAX_DOWNLOAD_BYTES:
+                                return None
+                        except ValueError:
+                            pass
                     content_type = resp.headers.get('Content-Type', '')
                     if (not content_type) or any(ct in content_type for ct in ALLOWED_CONTENT_TYPES):
                         data = await resp.read()
@@ -389,7 +399,7 @@ def export_links_pdf_placeholder():
 async def shorten_link(url: str) -> Optional[str]:
     try:
         safe_url = urllib.parse.quote(url, safe=":/?#[]@!$&'()*+,;=")
-        api = f"http://tinyurl.com/api-create.php?url={safe_url}"
+        api = f"https://tinyurl.com/api-create.php?url={safe_url}"
         async with aiohttp.ClientSession() as session:
             async with session.get(api, timeout=8) as resp:
                 if resp.status == 200:
