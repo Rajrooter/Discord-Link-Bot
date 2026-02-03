@@ -935,6 +935,23 @@ class LinkManagerCog(commands.Cog):
                 await self._handle_link(message, link)
         except Exception as e:
             logger.error(f"on_message failed: {e}", exc_info=True)
+        await self.bot.process_commands(message)
+        if not message.content:
+            return
+        links = re.findall(URL_REGEX, message.content)
+        if not links:
+            return
+        filtered = []
+        for link in links:
+            if not is_valid_url(link):
+                continue
+            if is_media_url(link):
+                continue
+            filtered.append(link)
+        if not filtered:
+            return
+        for link in filtered:
+            await self._handle_link(message, link)
 
     async def _handle_link(self, message: discord.Message, link: str):
         verdict, reason = get_link_verdict()
@@ -975,15 +992,20 @@ class LinkManagerCog(commands.Cog):
 # ---------------------------------------------------------------------------
 # Events & startup
 # ---------------------------------------------------------------------------
-app = Flask('')
+app = Flask(__name__)
 @app.route('/')
 def home():
     return "Bot is alive!"
 
+@app.route('/healthz')
+def health_check():
+    return {"status": "ok"}
+
 def run():
     port = int(os.environ.get("PORT", "8080"))
-    logger.info(f"Keep-alive server starting on port {port}")
-    app.run(host='0.0.0.0', port=port)
+    host = os.environ.get("WEB_HOST", "0.0.0.0")
+    logger.info(f"Keep-alive server starting on {host}:{port}")
+    app.run(host=host, port=port, use_reloader=False)
 
 def keep_alive():
     t = Thread(target=run, daemon=True)

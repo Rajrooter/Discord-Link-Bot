@@ -141,6 +141,20 @@ python test_mongo.py
 python main.py
 ```
 
+### 6.1 Render Web Service (Keeps Bot Online)
+
+If you deploy on Render as a **Web Service**, you must bind to the `PORT` that Render provides. This repo already starts a small health server in `main.py`, so Render can detect the open port.
+
+**Recommended settings (Render):**
+1. Service Type: **Web Service**
+2. Start Command: `python main.py`
+3. Environment Variables:
+   - `DISCORD_TOKEN=...`
+   - `GEMINI_API_KEY=...`
+4. Health Check Path (optional): `/healthz`
+
+**Note on HTTPS:** Render terminates HTTPS at the load balancer and forwards traffic to your app over HTTP. You do **not** need to serve HTTPS inside the container—binding to the `PORT` is sufficient.
+
 ### 7. Testing
 
 **Local Development Testing:**
@@ -170,6 +184,108 @@ If you experience duplicate command execution (commands running twice), check th
 1. **Multiple processes (different PIDs)**: If you see different PID numbers in the logs, multiple bot instances are running. Solution: Stop all instances and start only one.
 2. **Duplicate registration (same PID)**: If you see the same PID but `LinkManager.__init__` is called twice, the cog is being registered multiple times. This should not happen with the guarded `add_cog()` implementation.
 3. **Expected behavior**: You should see each diagnostic message exactly once per bot start with the same PID throughout.
+
+## ☁️ Oracle Cloud Free Tier (24×7) Deployment
+
+Use this when you want the bot to stay up 24×7 without an HTTP port. Oracle Cloud’s Always Free compute is a common option for always-on bots.
+
+### 1. Create an Always Free VM
+
+1. Sign up at [Oracle Cloud Free Tier](https://www.oracle.com/cloud/free/)
+2. Create a **Compute Instance**:
+   - **Image**: Ubuntu 22.04
+   - **Shape**: VM.Standard.E2.1.Micro (Always Free eligible)
+3. Download your SSH private key
+4. Open SSH (port 22) in the instance’s **Networking** → **Security Lists**
+
+### 2. Connect to Your VM
+
+```bash
+ssh -i /path/to/your_private_key ubuntu@<your_public_ip>
+```
+
+### 3. Install System Packages
+
+```bash
+sudo apt update
+sudo apt install -y python3 python3-venv python3-pip git
+```
+
+### 4. Clone and Configure the Bot
+
+```bash
+git clone https://github.com/yourusername/labour-bot.git
+cd labour-bot
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+Create your `.env` file:
+
+```bash
+nano .env
+```
+
+Add at least:
+
+```env
+DISCORD_TOKEN=your_discord_bot_token_here
+GEMINI_API_KEY=your_gemini_api_key
+```
+
+### 5. Run the Bot with systemd (Auto-Restart)
+
+Create a service file:
+
+```bash
+sudo nano /etc/systemd/system/labour-bot.service
+```
+
+Paste this (update paths to your repo):
+
+```ini
+[Unit]
+Description=Labour Bot (Discord)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/labour-bot
+EnvironmentFile=/home/ubuntu/labour-bot/.env
+ExecStart=/home/ubuntu/labour-bot/.venv/bin/python /home/ubuntu/labour-bot/main.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable and start:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable labour-bot
+sudo systemctl start labour-bot
+```
+
+Check status/logs:
+
+```bash
+sudo systemctl status labour-bot --no-pager
+sudo journalctl -u labour-bot -f
+```
+
+### 6. Update the Bot Later
+
+```bash
+cd /home/ubuntu/labour-bot
+git pull
+source .venv/bin/activate
+pip install -r requirements.txt
+sudo systemctl restart labour-bot
+```
 
 ## 🎮 Commands
 
