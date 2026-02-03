@@ -911,15 +911,20 @@ class LinkManagerCog(commands.Cog):
 # ---------------------------------------------------------------------------
 # Events & startup
 # ---------------------------------------------------------------------------
-app = Flask('')
+app = Flask(__name__)
 @app.route('/')
 def home():
     return "Bot is alive!"
 
+@app.route('/healthz')
+def health_check():
+    return {"status": "ok"}
+
 def run():
     port = int(os.environ.get("PORT", "8080"))
-    logger.info(f"Keep-alive server starting on port {port}")
-    app.run(host='0.0.0.0', port=port)
+    host = os.environ.get("WEB_HOST", "0.0.0.0")
+    logger.info(f"Keep-alive server starting on {host}:{port}")
+    app.run(host=host, port=port, use_reloader=False)
 
 def keep_alive():
     t = Thread(target=run, daemon=True)
