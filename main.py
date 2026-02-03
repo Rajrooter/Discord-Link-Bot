@@ -907,10 +907,34 @@ class LinkManagerCog(commands.Cog):
         # Placeholder: Implement summarization logic here
         await interaction.response.send_message("📝 Summarization not implemented yet.", ephemeral=True)
 
+    @commands.command(name="ping")
+    async def ping_command(self, ctx: commands.Context):
+        await safe_send(ctx, content="🏓 Pong! Bot is responding.")
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot:
             return
+        try:
+            await self.bot.process_commands(message)
+            if not message.content:
+                return
+            links = re.findall(URL_REGEX, message.content)
+            if not links:
+                return
+            filtered = []
+            for link in links:
+                if not is_valid_url(link):
+                    continue
+                if is_media_url(link):
+                    continue
+                filtered.append(link)
+            if not filtered:
+                return
+            for link in filtered:
+                await self._handle_link(message, link)
+        except Exception as e:
+            logger.error(f"on_message failed: {e}", exc_info=True)
         await self.bot.process_commands(message)
         if not message.content:
             return
@@ -998,6 +1022,8 @@ async def on_ready():
 ╚═══════════════════════════════════════════════╝
 """
     logger.info(ready_banner)
+    if not bot.intents.message_content:
+        logger.warning("Message content intent is disabled; link detection will not work.")
 
 
 @bot.event
