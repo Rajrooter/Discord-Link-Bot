@@ -24,6 +24,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
+from flask import Flask
+from threading import Thread
 
 import storage
 from utils import logger, is_valid_url, RateLimiter, EventCleanup
@@ -56,7 +58,6 @@ except ImportError:
 
 SESSION_ID = str(uuid.uuid4())
 load_dotenv()
-
 # Optional Google Gemini client (set GEMINI_API_KEY to enable)
 try:
     from google import genai  # type: ignore
@@ -2105,7 +2106,18 @@ class LinkManagerCog(commands.Cog, name="LinkManager"):
 # ---------------------------------------------------------------------------
 # Events & startup
 # ---------------------------------------------------------------------------
+app = Flask('')
+@app.route('/')
+def home():
+    return "Bot is alive!"
 
+def run():
+    app.run(host='0.0.0.0', port=8080)
+
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
+keep_alive()
 @bot.event
 async def on_ready():
     ready_banner = f"""
