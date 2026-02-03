@@ -59,6 +59,46 @@ except ImportError:
 SESSION_ID = str(uuid.uuid4())
 load_dotenv()
 
+AUTO_DELETE_ENABLED = os.environ.get("AUTO_DELETE_ENABLED", "1") == "1"
+try:
+    AUTO_DELETE_SECONDS_DEFAULT = int(os.environ.get("AUTO_DELETE_AFTER", "5"))
+except ValueError:
+    AUTO_DELETE_SECONDS_DEFAULT = 5
+
+BATCH_WINDOW_SECONDS = 3
+BATCH_THRESHOLD_DEFAULT = 5
+CONFIRM_TIMEOUT = 4
+
+RULES_FILE = "server_rules.txt"
+
+URL_REGEX = r'(?:https?://)\S+'
+IGNORED_EXTENSIONS = ['.gif', '.png', '.jpg', '.jpeg', '.webp', '.bmp', '.mp4', '.mov', '.avi']
+
+COMMUNITY_LEARNING_URL = os.environ.get("COMMUNITY_LEARNING_URL", "https://share.google/yf57dJNzEyAVM0asz")
+
+MAX_DOWNLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
+ALLOWED_CONTENT_TYPES = {
+    "text/plain",
+    "text/html",
+    "application/pdf",
+    "application/rtf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "text/csv",
+    "application/octet-stream",
+}
+EXCEL_TYPES = {".xls", ".xlsx", ".xlsm", ".xlsb", ".xlt", ".xltx", ".csv"}
+HTML_TYPES = {".html", ".htm", ".xhtml", ".asp", ".aspx"}
+TEXTISH_TYPES = {".txt", ".rtf", ".doc", ".docx", ".wps", ".csv"}
+
+try:
+    SECURITY_ALERT_CHANNEL_ID = int(os.environ.get("SECURITY_ALERT_CHANNEL_ID", "0") or 0)
+except ValueError:
+    SECURITY_ALERT_CHANNEL_ID = 0
+    logger.warning("SECURITY_ALERT_CHANNEL_ID must be an integer; defaulting to 0.")
+
 
 class GuildConfig:
     def __init__(self):
@@ -99,46 +139,6 @@ class GuildConfig:
 
 
 guild_config = GuildConfig()
-
-AUTO_DELETE_ENABLED = os.environ.get("AUTO_DELETE_ENABLED", "1") == "1"
-try:
-    AUTO_DELETE_SECONDS_DEFAULT = int(os.environ.get("AUTO_DELETE_AFTER", "5"))
-except ValueError:
-    AUTO_DELETE_SECONDS_DEFAULT = 5
-
-BATCH_WINDOW_SECONDS = 3
-BATCH_THRESHOLD_DEFAULT = 5
-CONFIRM_TIMEOUT = 4
-
-RULES_FILE = "server_rules.txt"
-
-URL_REGEX = r'(?:https?://)\S+'
-IGNORED_EXTENSIONS = ['.gif', '.png', '.jpg', '.jpeg', '.webp', '.bmp', '.mp4', '.mov', '.avi']
-
-COMMUNITY_LEARNING_URL = os.environ.get("COMMUNITY_LEARNING_URL", "https://share.google/yf57dJNzEyAVM0asz")
-
-MAX_DOWNLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
-ALLOWED_CONTENT_TYPES = {
-    "text/plain",
-    "text/html",
-    "application/pdf",
-    "application/rtf",
-    "application/msword",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "application/vnd.ms-excel",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "text/csv",
-    "application/octet-stream",
-}
-EXCEL_TYPES = {".xls", ".xlsx", ".xlsm", ".xlsb", ".xlt", ".xltx", ".csv"}
-HTML_TYPES = {".html", ".htm", ".xhtml", ".asp", ".aspx"}
-TEXTISH_TYPES = {".txt", ".rtf", ".doc", ".docx", ".wps", ".csv"}
-
-try:
-    SECURITY_ALERT_CHANNEL_ID = int(os.environ.get("SECURITY_ALERT_CHANNEL_ID", "0") or 0)
-except ValueError:
-    SECURITY_ALERT_CHANNEL_ID = 0
-    logger.warning("SECURITY_ALERT_CHANNEL_ID must be an integer; defaulting to 0.")
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +210,9 @@ async def download_bytes(url: str) -> Optional[bytes]:
 
 def get_link_verdict() -> tuple[str, str]:
     return ("Review manually", "Automated analysis is disabled. Please review this link yourself.")
-    def make_verdict_embed(link: str, verdict_line: str, reason_line: str, preview: str) -> discord.Embed:
+
+
+def make_verdict_embed(link: str, verdict_line: str, reason_line: str, preview: str) -> discord.Embed:
     embed = discord.Embed(
         title=verdict_line,
         description=reason_line,
@@ -329,7 +331,9 @@ def make_compact_help_embed() -> discord.Embed:
     embed.set_footer(text="💡 Drop any link to review • Upload docs for instant summary")
     embed.timestamp = datetime.datetime.utcnow()
     return embed
-    async def safe_send(target, content=None, embed=None, ephemeral=False, view=None, **extra):
+
+
+async def safe_send(target, content=None, embed=None, ephemeral=False, view=None, **extra):
     try:
         kwargs = {"content": content, "embed": embed}
         kwargs.update(extra)
@@ -532,76 +536,18 @@ intents.reactions = True
 def get_prefix(bot, message):
     prefixes = ["!"]
     return commands.when_mentioned_or(*prefixes)(bot, message)
-    # ---------------------------------------------------------------------------
-# Context menu callbacks (top-level)
-# ---------------------------------------------------------------------------
-
-@app_commands.context_menu(name="Summarize/Preview Document")
-async def summarize_preview_ctx(interaction: discord.Interaction, message: discord.Message):
-    cog = interaction.client.get_cog("LinkManager")
-    if not cog:
-        await interaction.response.send_message("⚠️ Cog not ready.", ephemeral=True)
-        return
-    await cog.handle_summarize_preview_ctx(interaction, message)
-
-
-# ---------------------------------------------------------------------------
-# Bot
-# ---------------------------------------------------------------------------
-
-class MyBot(commands.Bot):
-    async def setup_hook(self):
-        await self.add_cog(LinkManagerCog(self))
-        logger.info("✅ LinkManager cog added")
-
-        try:
-            if hasattr(storage, "prune_orphaned_pending"):
-                pruned = await asyncio.to_thread(storage.prune_orphaned_pending)
-                logger.info(f"🧹 Pruned orphaned pending links: {pruned}")
-            elif hasattr(storage, "clear_orphaned_pending"):
-                pruned = await asyncio.to_thread(storage.clear_orphaned_pending)
-                logger.info(f"🧹 Pruned orphaned pending links: {pruned}")
-        except Exception as e:
-            logger.warning(f"Startup prune failed: {e}")
-
-        cmd_names = [c.qualified_name for c in self.tree.walk_commands()]
-        logger.info(f"🔧 App commands loaded (pre-sync): {cmd_names}")
-
-        self.tree.add_command(summarize_preview_ctx)
-
-        synced_commands = []
-        try:
-            global_synced = await self.tree.sync()
-            synced_commands.extend(global_synced)
-            logger.info(f"✅ Synced {len(global_synced)} commands globally: {[c.name for c in global_synced]}")
-            if not global_synced:
-                logger.warning("⚠️ No global commands synced. Check token scope or restart.")
-        except Exception as e:
-            logger.error(f"Global sync failed: {e}")
-
-        test_guild_id = os.environ.get("TEST_GUILD_ID")
-        if test_guild_id:
-            try:
-                guild_id = int(test_guild_id)
-                guild = discord.Object(id=guild_id)
-                self.tree.copy_global_to(guild=guild)
-                guild_synced = await self.tree.sync(guild=guild)
-                logger.info(f"✅ Synced {len(guild_synced)} commands to test guild {guild_id}: {[c.name for c in guild_synced]}")
-                if not guild_synced:
-                    logger.warning(f"⚠️ No commands synced to test guild {guild_id}.")
-            except Exception as e:
-                logger.error(f"Test guild sync failed: {e}")
-
-        logger.info(f"✅ Total commands synced: {len(synced_commands)}")
-
-
-bot = MyBot(command_prefix=get_prefix, intents=intents, help_command=None)
-bot.remove_command("help")
 
 
 # ---------------------------------------------------------------------------
 # UI Components
 # ---------------------------------------------------------------------------
+
+def ack_interaction(interaction, ephemeral=False):
+    if ephemeral:
+        return interaction.response.defer(ephemeral=True)
+    else:
+        return interaction.response.defer()
+
 
 class CategoryModal(discord.ui.Modal, title="Save Summary to Category"):
     category = discord.ui.TextInput(label="Category name", required=True, max_length=60)
@@ -614,7 +560,9 @@ class CategoryModal(discord.ui.Modal, title="Save Summary to Category"):
         await interaction.response.defer(ephemeral=True)
         await self.on_submit_cb(str(self.category))
         await safe_send(interaction.followup, content=f"✅ Saved to category **{self.category}**", ephemeral=True)
-        class SummaryActionView(discord.ui.View):
+
+
+class SummaryActionView(discord.ui.View):
     def __init__(self, filename: str, summary: str, requester: discord.User, cog):
         super().__init__(timeout=180)
         self.filename = filename
@@ -721,7 +669,9 @@ class SummarizeView(discord.ui.View):
                 await self.message.edit(view=self)
         except Exception:
             pass
-            class DisclaimerView(discord.ui.View):
+
+
+class DisclaimerView(discord.ui.View):
     def __init__(self, links: list, author_id: int, original_message, cog):
         super().__init__(timeout=60)
         self.links = links
@@ -755,6 +705,25 @@ class SummarizeView(discord.ui.View):
             await self.message.delete()
         except Exception:
             pass
+
+
+class MultiLinkSelectView(discord.ui.View):
+    def __init__(self, links_data, author_id, original_message, cog):
+        super().__init__(timeout=300)
+        self.links_data = links_data
+        self.author_id = author_id
+        self.original_message = original_message
+        self.cog = cog
+        self.message = None
+
+    async def interaction_check(self, interaction):
+        return interaction.user.id == self.author_id
+
+    @discord.ui.button(label="Save All", style=discord.ButtonStyle.green, emoji="💾")
+    async def save_all(self, interaction, button):
+        await ack_interaction(interaction, ephemeral=True)
+        # Placeholder: Implement saving logic here
+        await safe_send(interaction.followup, content="✅ All links saved (placeholder).", ephemeral=True)
 
 
 class LinkActionView(discord.ui.View):
@@ -847,9 +816,87 @@ class LinkActionView(discord.ui.View):
                 child.disabled = True
 
 
-# ... (The rest of the file remains unchanged from your latest version,
-# except all AI usage removed and calls replaced with get_link_verdict,
-# /analyze + audit_server removed, and keep_alive moved under __main__.)
+# ---------------------------------------------------------------------------
+# Context menu callbacks (top-level)
+# ---------------------------------------------------------------------------
+
+@app_commands.context_menu(name="Summarize/Preview Document")
+async def summarize_preview_ctx(interaction: discord.Interaction, message: discord.Message):
+    cog = interaction.client.get_cog("LinkManager")
+    if not cog:
+        await interaction.response.send_message("⚠️ Cog not ready.", ephemeral=True)
+        return
+    await cog.handle_summarize_preview_ctx(interaction, message)
+
+
+# ---------------------------------------------------------------------------
+# Bot
+# ---------------------------------------------------------------------------
+
+class MyBot(commands.Bot):
+    async def setup_hook(self):
+        await self.add_cog(LinkManagerCog(self))
+        logger.info("✅ LinkManager cog added")
+
+        try:
+            if hasattr(storage, "prune_orphaned_pending"):
+                pruned = await asyncio.to_thread(storage.prune_orphaned_pending)
+                logger.info(f"🧹 Pruned orphaned pending links: {pruned}")
+            elif hasattr(storage, "clear_orphaned_pending"):
+                pruned = await asyncio.to_thread(storage.clear_orphaned_pending)
+                logger.info(f"🧹 Pruned orphaned pending links: {pruned}")
+        except Exception as e:
+            logger.warning(f"Startup prune failed: {e}")
+
+        cmd_names = [c.qualified_name for c in self.tree.walk_commands()]
+        logger.info(f"🔧 App commands loaded (pre-sync): {cmd_names}")
+
+        self.tree.add_command(summarize_preview_ctx)
+
+        synced_commands = []
+        try:
+            global_synced = await self.tree.sync()
+            synced_commands.extend(global_synced)
+            logger.info(f"✅ Synced {len(global_synced)} commands globally: {[c.name for c in global_synced]}")
+            if not global_synced:
+                logger.warning("⚠️ No global commands synced. Check token scope or restart.")
+        except Exception as e:
+            logger.error(f"Global sync failed: {e}")
+
+        test_guild_id = os.environ.get("TEST_GUILD_ID")
+        if test_guild_id:
+            try:
+                guild_id = int(test_guild_id)
+                guild = discord.Object(id=guild_id)
+                self.tree.copy_global_to(guild=guild)
+                guild_synced = await self.tree.sync(guild=guild)
+                logger.info(f"✅ Synced {len(guild_synced)} commands to test guild {guild_id}: {[c.name for c in guild_synced]}")
+                if not guild_synced:
+                    logger.warning(f"⚠️ No commands synced to test guild {guild_id}.")
+            except Exception as e:
+                logger.error(f"Test guild sync failed: {e}")
+
+        logger.info(f"✅ Total commands synced: {len(synced_commands)}")
+
+
+bot = MyBot(command_prefix=get_prefix, intents=intents, help_command=None)
+bot.remove_command("help")
+
+
+class LinkManagerCog(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
+        self.pending_links = {}
+        self.guild_pending_counts = {}
+        self.links_to_categorize = {}
+
+    async def _get_preferred_prefix(self, message):
+        return "!"
+
+    async def handle_summarize_preview_ctx(self, interaction, message):
+        # Placeholder: Implement summarization logic here
+        await interaction.response.send_message("📝 Summarization not implemented yet.", ephemeral=True)
+
 
 # ---------------------------------------------------------------------------
 # Events & startup
