@@ -907,6 +907,63 @@ class LinkManagerCog(commands.Cog):
         # Placeholder: Implement summarization logic here
         await interaction.response.send_message("📝 Summarization not implemented yet.", ephemeral=True)
 
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        if message.author.bot:
+            return
+        await self.bot.process_commands(message)
+        if not message.content:
+            return
+        links = re.findall(URL_REGEX, message.content)
+        if not links:
+            return
+        filtered = []
+        for link in links:
+            if not is_valid_url(link):
+                continue
+            if is_media_url(link):
+                continue
+            filtered.append(link)
+        if not filtered:
+            return
+        for link in filtered:
+            await self._handle_link(message, link)
+
+    async def _handle_link(self, message: discord.Message, link: str):
+        verdict, reason = get_link_verdict()
+        preview = await link_preview(link)
+        embed = make_verdict_embed(link, verdict, reason, preview)
+        entry = {
+            "url": link,
+            "timestamp": datetime.datetime.utcnow().isoformat(),
+            "author": str(message.author),
+            "user_id": message.author.id,
+            "guild_id": message.guild.id if message.guild else None,
+            "archived": False,
+            "expires_at": None,
+        }
+        pending_id = await asyncio.to_thread(storage.add_pending_link, entry)
+        view = LinkActionView(link, message.author.id, message, pending_id, self, ai_verdict=verdict)
+        prompt_msg = await safe_send(message.channel, embed=embed, view=view)
+        if prompt_msg:
+            view.message = prompt_msg
+            self.pending_links[prompt_msg.id] = pending_id
+            await asyncio.to_thread(storage.update_pending_with_bot_msg_id, pending_id, prompt_msg.id)
+            if message.guild:
+                self.guild_pending_counts[message.guild.id] = self.guild_pending_counts.get(message.guild.id, 0) + 1
+
+    @commands.command(name="pendinglinks")
+    async def pending_links_command(self, ctx: commands.Context):
+        links = await asyncio.to_thread(storage.get_pending_links_for_user, ctx.author.id)
+        if not links:
+            await safe_send(ctx, content="✅ No pending links.")
+            return
+        lines = []
+        for idx, entry in enumerate(links, start=1):
+            url = entry.get("url", "unknown")
+            lines.append(f"{idx}. {url}")
+        await safe_send(ctx, content="🕒 **Your pending links:**\n" + "\n".join(lines))
+
 
 # ---------------------------------------------------------------------------
 # Events & startup
