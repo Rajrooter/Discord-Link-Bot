@@ -6,3 +6,4 @@ python-docx>=0.8.11
 google-genai>=0.10.0
 pytest
 pytest-asyncio
+Flask>=3.0.0
